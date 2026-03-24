@@ -131,11 +131,126 @@ static PathCell s_path[MAX_PATH_LEN];
 static int s_path_len = 0;
 static int s_current_maze = 0;
 
+// ---- Procedural maze generation (DFS recursive backtracker) ----
+static uint8_t s_gen_maze[MAZE_ROWS][MAZE_COLS];
+static bool s_using_generated = false;
+
+// Static DFS stack to avoid stack overflow
+static uint8_t s_gen_stack_x[MAZE_ROWS * MAZE_COLS];
+static uint8_t s_gen_stack_y[MAZE_ROWS * MAZE_COLS];
+
+// Simple PRNG (xorshift32) for maze generation
+static uint32_t s_rng_state;
+
+static uint32_t xorshift32(void) {
+  uint32_t x = s_rng_state;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  s_rng_state = x;
+  return x;
+}
+
+static void generate_maze(int hour, int day) {
+  // Seed RNG from hour + day
+  s_rng_state = (uint32_t)(hour + day * 24 + 1);
+  // Warm up the RNG a few rounds
+  for (int i = 0; i < 8; i++) xorshift32();
+
+  // Initialize all cells with all walls (right + bottom = 3)
+  for (int r = 0; r < MAZE_ROWS; r++) {
+    for (int c = 0; c < MAZE_COLS; c++) {
+      s_gen_maze[r][c] = 3;
+    }
+  }
+
+  // Visited array
+  bool visited[MAZE_ROWS][MAZE_COLS];
+  memset(visited, 0, sizeof(visited));
+
+  // Start DFS at (0, 0)
+  int stack_top = 0;
+  s_gen_stack_x[stack_top] = 0;
+  s_gen_stack_y[stack_top] = 0;
+  visited[0][0] = true;
+
+  // Direction offsets: right, down, left, up
+  static const int dx[] = {1, 0, -1, 0};
+  static const int dy[] = {0, 1, 0, -1};
+
+  while (stack_top >= 0) {
+    int cx = s_gen_stack_x[stack_top];
+    int cy = s_gen_stack_y[stack_top];
+
+    // Collect unvisited neighbors
+    int neighbors[4];
+    int n_count = 0;
+    for (int d = 0; d < 4; d++) {
+      int nx = cx + dx[d];
+      int ny = cy + dy[d];
+      if (nx >= 0 && nx < MAZE_COLS && ny >= 0 && ny < MAZE_ROWS && !visited[ny][nx]) {
+        neighbors[n_count++] = d;
+      }
+    }
+
+    if (n_count == 0) {
+      // Backtrack
+      stack_top--;
+    } else {
+      // Pick a random unvisited neighbor
+      int choice = (int)(xorshift32() % n_count);
+      int d = neighbors[choice];
+      int nx = cx + dx[d];
+      int ny = cy + dy[d];
+
+      // Carve wall between current cell and neighbor
+      if (d == 0) {
+        // Moving right: remove right wall of current cell
+        s_gen_maze[cy][cx] &= ~1;
+      } else if (d == 1) {
+        // Moving down: remove bottom wall of current cell
+        s_gen_maze[cy][cx] &= ~2;
+      } else if (d == 2) {
+        // Moving left: remove right wall of neighbor
+        s_gen_maze[ny][nx] &= ~1;
+      } else if (d == 3) {
+        // Moving up: remove bottom wall of neighbor
+        s_gen_maze[ny][nx] &= ~2;
+      }
+
+      visited[ny][nx] = true;
+      stack_top++;
+      s_gen_stack_x[stack_top] = (uint8_t)nx;
+      s_gen_stack_y[stack_top] = (uint8_t)ny;
+    }
+  }
+}
+
+// ---- Get the active maze data ----
+static const uint8_t (*get_active_maze(void))[MAZE_COLS] {
+  if (s_using_generated) {
+    return (const uint8_t (*)[MAZE_COLS])s_gen_maze;
+  }
+  return s_mazes[s_current_maze];
+}
+
+// ---- Animated path drawing ----
+static int s_visible_path_len = 0;
+static AppTimer *s_path_timer = NULL;
+
+// ---- Pulsing dot ----
+static int s_dot_pulse = 0; // 0-9, cycles
+
+static int dot_radius(void) {
+  // Oscillate between 3 and 5
+  return 3 + (s_dot_pulse < 5 ? s_dot_pulse : 9 - s_dot_pulse) * 2 / 4;
+}
+
 // ---- Pebble globals ----
 static Window *s_window;
 static Layer *s_canvas_layer;
 
-// ---- Check if we can move between cells in the current maze ----
+// ---- Check if we can move between cells in the active maze ----
 // Returns true if there is NO wall between (c1,r1) and (c2,r2).
 static bool can_move(int c1, int r1, int c2, int r2) {
   // Out of bounds
@@ -144,7 +259,7 @@ static bool can_move(int c1, int r1, int c2, int r2) {
   int dc = c2 - c1;
   int dr = r2 - r1;
 
-  const uint8_t (*maze)[MAZE_COLS] = s_mazes[s_current_maze];
+  const uint8_t (*maze)[MAZE_COLS] = get_active_maze();
 
   if (dc == 1 && dr == 0) {
     // Moving right: check right wall of (c1,r1)
@@ -163,8 +278,8 @@ static bool can_move(int c1, int r1, int c2, int r2) {
 }
 
 // ---- Solve maze using BFS from (0,0) to (MAZE_COLS-1, MAZE_ROWS-1) ----
-// Stores the solution path in s_path/s_path_len.
-static void solve_maze(void) {
+// Stores the solution path in s_path/s_path_len. Returns true if solved.
+static bool solve_maze(void) {
   // BFS parent tracking: store linear index of parent, -1 for unvisited
   int16_t parent[MAZE_ROWS * MAZE_COLS];
   memset(parent, -1, sizeof(parent));
@@ -247,18 +362,60 @@ static void solve_maze(void) {
       }
     }
   }
+  return found;
+}
+
+// ---- Forward declarations ----
+static void path_draw_callback(void *data);
+
+// ---- Start animated path drawing ----
+static void start_path_animation(void) {
+  s_visible_path_len = 0;
+  if (s_path_timer) {
+    app_timer_cancel(s_path_timer);
+  }
+  s_path_timer = app_timer_register(80, path_draw_callback, NULL);
+}
+
+// ---- Path animation timer callback ----
+static void path_draw_callback(void *data) {
+  if (s_visible_path_len < s_path_len) {
+    s_visible_path_len++;
+    s_dot_pulse = (s_dot_pulse + 1) % 10;
+    layer_mark_dirty(s_canvas_layer);
+    s_path_timer = app_timer_register(80, path_draw_callback, NULL);
+  } else {
+    s_path_timer = NULL;
+  }
 }
 
 // ---- Select maze based on hour and solve it ----
-static void update_maze(int hour) {
-  s_current_maze = hour % NUM_MAZES;
-  solve_maze();
+static void update_maze(int hour, int day) {
+  // Cancel any running path animation
+  if (s_path_timer) {
+    app_timer_cancel(s_path_timer);
+    s_path_timer = NULL;
+  }
+
+  // Try procedural generation first
+  generate_maze(hour, day);
+  s_using_generated = true;
+  bool solved = solve_maze();
+
+  if (!solved) {
+    // Fallback to pre-made maze 0
+    s_using_generated = false;
+    s_current_maze = 0;
+    solve_maze();
+  }
+
+  // Start animated path drawing
+  start_path_animation();
 }
 
 // ---- Drawing ----
 static void canvas_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
-  (void)bounds;
 
   // Get current time for dot position
   time_t now = time(NULL);
@@ -272,9 +429,9 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     if (dot_index >= s_path_len) dot_index = s_path_len - 1;
   }
 
-  // Offset to center the maze on screen
-  int ox = (144 - MAZE_COLS * CELL_W) / 2;
-  int oy = (168 - MAZE_ROWS * CELL_H) / 2;
+  // Offset to center the maze on screen (use bounds instead of hardcoded values)
+  int ox = (bounds.size.w - MAZE_COLS * CELL_W) / 2;
+  int oy = (bounds.size.h - MAZE_ROWS * CELL_H) / 2;
 
   // Background: black
   graphics_context_set_fill_color(ctx, GColorBlack);
@@ -291,12 +448,17 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   GColor trail_color = GColorWhite;
 #endif
 
-  const uint8_t (*maze)[MAZE_COLS] = s_mazes[s_current_maze];
+  const uint8_t (*maze)[MAZE_COLS] = get_active_maze();
 
-  // Draw visited trail (cells along path up to dot position)
+  // Determine how many trail cells to draw: use animated s_visible_path_len
+  // but cap at the current dot_index position
+  int trail_limit = s_visible_path_len;
+  if (trail_limit > dot_index) trail_limit = dot_index;
+
+  // Draw visited trail (cells along path up to animated visible length)
 #ifdef PBL_COLOR
   graphics_context_set_fill_color(ctx, trail_color);
-  for (int i = 0; i <= dot_index && i < s_path_len; i++) {
+  for (int i = 0; i <= trail_limit && i < s_path_len; i++) {
     int cx = ox + s_path[i].col * CELL_W + CELL_W / 2;
     int cy = oy + s_path[i].row * CELL_H + CELL_H / 2;
     graphics_fill_circle(ctx, GPoint(cx, cy), 2);
@@ -304,7 +466,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 #else
   // On B&W, draw a subtle trail with small dots
   graphics_context_set_fill_color(ctx, trail_color);
-  for (int i = 0; i <= dot_index && i < s_path_len; i++) {
+  for (int i = 0; i <= trail_limit && i < s_path_len; i++) {
     int cx = ox + s_path[i].col * CELL_W + CELL_W / 2;
     int cy = oy + s_path[i].row * CELL_H + CELL_H / 2;
     graphics_fill_circle(ctx, GPoint(cx, cy), 1);
@@ -341,23 +503,23 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     }
   }
 
-  // Draw the dot at current position
+  // Draw the pulsing dot at current position
   if (s_path_len > 0) {
     int cx = ox + s_path[dot_index].col * CELL_W + CELL_W / 2;
     int cy = oy + s_path[dot_index].row * CELL_H + CELL_H / 2;
 
     graphics_context_set_fill_color(ctx, dot_color);
-    graphics_fill_circle(ctx, GPoint(cx, cy), 4);
+    graphics_fill_circle(ctx, GPoint(cx, cy), dot_radius());
   }
 
-  // Draw hour text at bottom center
+  // Draw time text at bottom-right with GOTHIC_18 font
   char buf[8];
   snprintf(buf, sizeof(buf), "%d:%02d", t->tm_hour, t->tm_min);
 
   graphics_context_set_text_color(ctx, GColorWhite);
-  GRect text_rect = GRect(0, oy + MAZE_ROWS * CELL_H + 1, 144, 20);
+  GRect text_rect = GRect(0, oy + MAZE_ROWS * CELL_H + 1, bounds.size.w, 22);
   graphics_draw_text(ctx, buf,
-    fonts_get_system_font(FONT_KEY_GOTHIC_14),
+    fonts_get_system_font(FONT_KEY_GOTHIC_18),
     text_rect,
     GTextOverflowModeTrailingEllipsis,
     GTextAlignmentCenter,
@@ -368,9 +530,18 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   // If the hour changed, regenerate the maze
   if (units_changed & HOUR_UNIT) {
-    update_maze(tick_time->tm_hour);
+    update_maze(tick_time->tm_hour, tick_time->tm_yday);
   }
-  // Always mark dirty to update dot position
+
+  // If the minute changed, restart path animation
+  if ((units_changed & MINUTE_UNIT) && !(units_changed & HOUR_UNIT)) {
+    start_path_animation();
+  }
+
+  // Increment pulse counter every second for pulsing dot effect
+  s_dot_pulse = (s_dot_pulse + 1) % 10;
+
+  // Always mark dirty to update dot pulse
   layer_mark_dirty(s_canvas_layer);
 }
 
@@ -386,10 +557,14 @@ static void window_load(Window *window) {
   // Initialize maze with current hour
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  update_maze(t->tm_hour);
+  update_maze(t->tm_hour, t->tm_yday);
 }
 
 static void window_unload(Window *window) {
+  if (s_path_timer) {
+    app_timer_cancel(s_path_timer);
+    s_path_timer = NULL;
+  }
   layer_destroy(s_canvas_layer);
 }
 
@@ -403,7 +578,7 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
 
-  tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+  tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
 }
 
 static void deinit(void) {
