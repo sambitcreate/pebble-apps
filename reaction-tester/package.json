@@ -1,0 +1,22 @@
+{
+  "name": "reaction-tester",
+  "author": "Sambit Biswas",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Reaction Tester",
+    "uuid": "a1b2c3d4-4444-4000-8000-000000000004",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["diorite", "basalt", "emery"],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": {},
+    "resources": {
+      "media": []
+    }
+  }
+}
