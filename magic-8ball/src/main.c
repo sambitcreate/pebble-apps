@@ -4,6 +4,22 @@ static Window *s_window;
 static Layer *s_canvas;
 static TextLayer *s_answer_layer;
 static TextLayer *s_prompt_layer;
+static StatusBarLayer *s_status_bar;
+
+// First-launch overlay
+static Layer *s_overlay_layer;
+static TextLayer *s_overlay_text;
+static bool s_first_launch = true;
+
+// Animation state
+static AppTimer *s_anim_timer;
+static int s_scale_pct = 0;       // 0..100 triangle grow percentage
+static bool s_animating = false;
+
+// History dots: last 5 answer indices (-1 = unused)
+#define HISTORY_MAX 5
+static int s_history[HISTORY_MAX] = {-1, -1, -1, -1, -1};
+static int s_history_count = 0;
 
 static const char *ANSWERS[] = {
   "It is\ncertain",
@@ -32,13 +48,93 @@ static const char *ANSWERS[] = {
 static int s_current = 0;
 static bool s_revealed = false;
 
+// Forward declarations
+static void dismiss_overlay(void);
+
+// Answer category: 0-9 positive, 10-14 neutral, 15-19 negative
+#ifdef PBL_COLOR
+typedef enum {
+  CATEGORY_POSITIVE,
+  CATEGORY_NEUTRAL,
+  CATEGORY_NEGATIVE,
+} AnswerCategory;
+
+static AnswerCategory get_category(int index) {
+  if (index < 10) return CATEGORY_POSITIVE;
+  if (index < 15) return CATEGORY_NEUTRAL;
+  return CATEGORY_NEGATIVE;
+}
+
+static GColor category_color(AnswerCategory cat) {
+  switch (cat) {
+    case CATEGORY_POSITIVE: return GColorGreen;
+    case CATEGORY_NEUTRAL:  return GColorChromeYellow;
+    case CATEGORY_NEGATIVE: return GColorRed;
+  }
+  return GColorWhite;
+}
+#endif
+
+// Push answer index into history ring
+static void history_push(int answer_idx) {
+  // Shift everything right
+  for (int i = HISTORY_MAX - 1; i > 0; i--) {
+    s_history[i] = s_history[i - 1];
+  }
+  s_history[0] = answer_idx;
+  if (s_history_count < HISTORY_MAX) s_history_count++;
+}
+
+// --- Animation timer callback ---
+static void anim_timer_callback(void *data) {
+  s_anim_timer = NULL;
+  if (!s_animating) return;
+
+  s_scale_pct += 8;  // ~12-13 frames over ~500ms at 40ms interval
+  if (s_scale_pct >= 100) {
+    s_scale_pct = 100;
+    s_animating = false;
+    // Show answer text now that triangle is fully grown
+    text_layer_set_text(s_answer_layer, ANSWERS[s_current]);
+  } else {
+    // Ease-out: decelerate towards end
+    s_anim_timer = app_timer_register(40, anim_timer_callback, NULL);
+  }
+  layer_mark_dirty(s_canvas);
+}
+
+static void start_reveal_animation(void) {
+  s_scale_pct = 0;
+  s_animating = true;
+  // Hide text during grow animation
+  text_layer_set_text(s_answer_layer, "");
+  s_anim_timer = app_timer_register(40, anim_timer_callback, NULL);
+}
+
+// Ease-out function: fast start, slow end
+static int ease_out(int pct) {
+  // quadratic ease-out: 1 - (1-t)^2 mapped to 0..100
+  int inv = 100 - pct;
+  return 100 - (inv * inv / 100);
+}
+
 static void reveal_answer(void) {
+  // Dismiss first-launch overlay if showing
+  if (s_first_launch) {
+    dismiss_overlay();
+  }
+
   s_current = rand() % NUM_ANSWERS;
   s_revealed = true;
 
-  text_layer_set_text(s_answer_layer, ANSWERS[s_current]);
+  // Push to history
+  history_push(s_current);
+
   text_layer_set_text(s_prompt_layer, "");
   layer_mark_dirty(s_canvas);
+
+  // Start grow animation
+  start_reveal_animation();
 
   // Vibrate
   static const uint32_t segments[] = {80, 40, 80};
@@ -48,6 +144,12 @@ static void reveal_answer(void) {
 
 static void reset_ball(void) {
   s_revealed = false;
+  s_animating = false;
+  s_scale_pct = 0;
+  if (s_anim_timer) {
+    app_timer_cancel(s_anim_timer);
+    s_anim_timer = NULL;
+  }
   text_layer_set_text(s_answer_layer, "");
   text_layer_set_text(s_prompt_layer, "Shake me\nor press Select");
   layer_mark_dirty(s_canvas);
@@ -56,21 +158,44 @@ static void reset_ball(void) {
 static void canvas_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   int cx = bounds.size.w / 2;
-  int cy = bounds.size.h / 2 - 10;
+  // Shift down 16px for status bar, then center
+  int cy = 16 + (bounds.size.h - 16) / 2 - 10;
 
   // Draw the 8-ball circle
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_circle(ctx, GPoint(cx, cy), 60);
 
   if (s_revealed) {
-    // Inner triangle
+    // Compute eased scale
+    int sc = ease_out(s_scale_pct);  // 0..100
+
+    // Full-size triangle vertices relative to center (cx, cy)
+    // Apex: (cx, cy-35), BL: (cx-30, cy+20), BR: (cx+30, cy+20)
+    // Centroid Y = (cy-35 + cy+20 + cy+20)/3 = cy + 5/3 ~ cy+2
+    int centroid_y = cy + 2;
+
+    // Offsets from centroid at full scale
+    // apex: (0, -37), bl: (-30, +18), br: (+30, +18)
+    int apex_dy = -37 * sc / 100;
+    int bot_dy  =  18 * sc / 100;
+    int half_w  =  30 * sc / 100;
+
     GPoint tri[3] = {
-      GPoint(cx, cy - 35),
-      GPoint(cx - 30, cy + 20),
-      GPoint(cx + 30, cy + 20),
+      GPoint(cx, centroid_y + apex_dy),
+      GPoint(cx - half_w, centroid_y + bot_dy),
+      GPoint(cx + half_w, centroid_y + bot_dy),
     };
 
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+    // Color-coded triangle by category
+    GColor tri_color;
+    #ifdef PBL_COLOR
+      tri_color = category_color(get_category(s_current));
+    #else
+      tri_color = GColorWhite;
+    #endif
+
+    graphics_context_set_fill_color(ctx, tri_color);
+
     GPathInfo path_info = {
       .num_points = 3,
       .points = tri,
@@ -87,6 +212,54 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                        GTextOverflowModeTrailingEllipsis,
                        GTextAlignmentCenter, NULL);
   }
+
+  // Draw history dots at bottom
+  if (s_history_count > 0) {
+    int dot_y = bounds.size.h - 10;
+    int total_w = s_history_count * 8 + (s_history_count - 1) * 4;
+    int start_x = (bounds.size.w - total_w) / 2;
+
+    for (int i = 0; i < s_history_count; i++) {
+      int idx = s_history[i];
+      if (idx < 0) continue;
+
+      GColor dot_color;
+      #ifdef PBL_COLOR
+        dot_color = category_color(get_category(idx));
+      #else
+        (void)idx;
+        dot_color = GColorBlack;
+      #endif
+
+      graphics_context_set_fill_color(ctx, dot_color);
+      int dx = start_x + i * 12 + 4;
+      graphics_fill_circle(ctx, GPoint(dx, dot_y), 3);
+    }
+  }
+}
+
+// --- Overlay for first-launch ---
+static void overlay_update(Layer *layer, GContext *ctx) {
+  GRect bounds = layer_get_bounds(layer);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+}
+
+static void dismiss_overlay(void) {
+  s_first_launch = false;
+  if (s_overlay_layer) {
+    layer_set_hidden(s_overlay_layer, true);
+  }
+  if (s_overlay_text) {
+    layer_set_hidden(text_layer_get_layer(s_overlay_text), true);
+  }
+}
+
+// --- BT connection handler ---
+static void bt_handler(bool connected) {
+  if (!connected) {
+    vibes_double_pulse();
+  }
 }
 
 static void tap_handler(AccelAxisType axis, int32_t direction) {
@@ -94,6 +267,11 @@ static void tap_handler(AccelAxisType axis, int32_t direction) {
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
+  // Dismiss overlay on any button if first launch
+  if (s_first_launch) {
+    dismiss_overlay();
+    return;
+  }
   if (s_revealed) {
     reset_ball();
   } else {
@@ -102,10 +280,18 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void up_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_first_launch) {
+    dismiss_overlay();
+    return;
+  }
   reveal_answer();
 }
 
 static void down_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_first_launch) {
+    dismiss_overlay();
+    return;
+  }
   reset_ball();
 }
 
@@ -121,35 +307,61 @@ static void window_load(Window *window) {
 
   window_set_background_color(window, PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorWhite));
 
+  // Status bar at top
+  s_status_bar = status_bar_layer_create();
+  status_bar_layer_set_colors(s_status_bar,
+    PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorWhite),
+    PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+  status_bar_layer_set_separator_mode(s_status_bar, StatusBarLayerSeparatorModeDotted);
+  layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
+
+  // Canvas for the 8-ball drawing
   s_canvas = layer_create(bounds);
   layer_set_update_proc(s_canvas, canvas_update);
   layer_add_child(root, s_canvas);
 
   int cx = bounds.size.w / 2;
-  int cy = bounds.size.h / 2 - 10;
+  // Shift center down 16px for status bar
+  int cy = 16 + (bounds.size.h - 16) / 2 - 10;
 
   // Answer text (inside the triangle area)
   s_answer_layer = text_layer_create(GRect(cx - 40, cy - 25, 80, 50));
   text_layer_set_background_color(s_answer_layer, GColorClear);
-  text_layer_set_text_color(s_answer_layer, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+  text_layer_set_text_color(s_answer_layer, PBL_IF_COLOR_ELSE(GColorBlack, GColorBlack));
   text_layer_set_font(s_answer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_answer_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_answer_layer));
 
-  // Prompt text at bottom
-  s_prompt_layer = text_layer_create(GRect(0, bounds.size.h - 30, bounds.size.w, 30));
+  // Prompt text at bottom (above history dots)
+  s_prompt_layer = text_layer_create(GRect(0, bounds.size.h - 40, bounds.size.w, 30));
   text_layer_set_background_color(s_prompt_layer, GColorClear);
   text_layer_set_text_color(s_prompt_layer, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
   text_layer_set_font(s_prompt_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_prompt_layer, GTextAlignmentCenter);
   text_layer_set_text(s_prompt_layer, "Shake me\nor press Select");
   layer_add_child(root, text_layer_get_layer(s_prompt_layer));
+
+  // First-launch overlay
+  s_overlay_layer = layer_create(bounds);
+  layer_set_update_proc(s_overlay_layer, overlay_update);
+  layer_add_child(root, s_overlay_layer);
+
+  s_overlay_text = text_layer_create(GRect(10, bounds.size.h / 2 - 40, bounds.size.w - 20, 80));
+  text_layer_set_background_color(s_overlay_text, GColorClear);
+  text_layer_set_text_color(s_overlay_text, GColorWhite);
+  text_layer_set_font(s_overlay_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(s_overlay_text, GTextAlignmentCenter);
+  text_layer_set_text(s_overlay_text, "Shake or press\nany button!");
+  layer_add_child(root, text_layer_get_layer(s_overlay_text));
 }
 
 static void window_unload(Window *window) {
+  text_layer_destroy(s_overlay_text);
+  layer_destroy(s_overlay_layer);
   text_layer_destroy(s_answer_layer);
   text_layer_destroy(s_prompt_layer);
   layer_destroy(s_canvas);
+  status_bar_layer_destroy(s_status_bar);
 }
 
 static void init(void) {
@@ -162,10 +374,18 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
   accel_tap_service_subscribe(tap_handler);
+  connection_service_subscribe((ConnectionHandlers) {
+    .pebble_app_connection_handler = bt_handler,
+  });
 }
 
 static void deinit(void) {
+  connection_service_unsubscribe();
   accel_tap_service_unsubscribe();
+  if (s_anim_timer) {
+    app_timer_cancel(s_anim_timer);
+    s_anim_timer = NULL;
+  }
   window_destroy(s_window);
 }
 
