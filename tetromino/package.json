@@ -1,0 +1,27 @@
+{
+  "author": "Sambit Biswas",
+  "company": "Sambit Biswas",
+  "wpikeaway": false,
+  "pebble": {
+    "displayName": "Tetromino",
+    "uuid": "a1b2c3d4-e005-4000-8000-000000000e05",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "watchapp": {
+      "watchface": true
+    },
+    "targetPlatforms": [
+      "diorite",
+      "basalt",
+      "emery"
+    ],
+    "resources": {
+      "media": []
+    },
+    "messageKeys": {}
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "name": "tetromino",
+  "version": "1.0.0"
+}
