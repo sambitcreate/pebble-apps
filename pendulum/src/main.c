@@ -5,15 +5,18 @@
 #define SWING_AMPLITUDE    30          // degrees
 #define BOB_MIN_DIST       40          // px at minute 0
 #define BOB_MAX_DIST       130         // px at minute 59
-#define BOB_RADIUS         8
+#define BOB_RADIUS         12          // increased from 8 to accommodate date text
 #define HOUR_DOT_RADIUS    3
 #define HOUR_DOT_ACTIVE_R  5
 #define TRAIL_ARC_POINTS   12
+#define TICK_MARK_LENGTH   5           // length of tick marks on swing arc
+#define NUM_TICK_MARKS     4           // tick marks at 15-second intervals (0, 15, 30, 45)
 
 // ── Globals ────────────────────────────────────────────────────────────
 static Window    *s_window;
 static Layer     *s_canvas;
-static int        s_hour, s_minute, s_second;
+static int        s_hour, s_minute, s_second, s_day;
+static int        s_prev_hour;         // track hour changes for chime
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -22,14 +25,48 @@ static int32_t deg_to_trig(int deg) {
   return (deg * TRIG_MAX_ANGLE) / 360;
 }
 
-// Compute the pendulum swing angle in trig-angle units.
-// angle_deg = SWING_AMPLITUDE * sin(second * 2*pi / 60)
+// Compute the pendulum swing angle in trig-angle units with damped harmonic motion.
+// Base: angle_deg = SWING_AMPLITUDE * sin(second * 2*pi / 60)
+// Damped: apply cubic easing so the bob decelerates at endpoints
+// and accelerates through center, giving more natural physics.
 static int32_t pendulum_angle(int second) {
   // fraction of cycle: second / 60 mapped to 0..TRIG_MAX_ANGLE
   int32_t phase = (second * TRIG_MAX_ANGLE) / 60;
-  int32_t sine  = sin_lookup(phase);                       // -TRIG_MAX_RATIO .. +TRIG_MAX_RATIO
+  int32_t sine  = sin_lookup(phase);   // -TRIG_MAX_RATIO .. +TRIG_MAX_RATIO
+
+  // Apply cubic easing: sine^3 / TRIG_MAX_RATIO^2
+  // This makes the motion slower at extremes (deceleration) and faster at center (acceleration)
+  // sine^3 preserves the sign and squishes the waveform toward center
+  int32_t sine_sq = (sine * sine) / TRIG_MAX_RATIO;  // always positive, range 0..TRIG_MAX_RATIO
+  int32_t sine_cb = (sine_sq * sine) / TRIG_MAX_RATIO; // same sign as sine, range -TRIG_MAX_RATIO..+TRIG_MAX_RATIO
+
+  // Blend: 60% cubic + 40% linear for a subtle but noticeable damped feel
+  int32_t blended = (sine * 40 + sine_cb * 60) / 100;
+
   // result in trig-angle units
-  return (SWING_AMPLITUDE * sine * (int32_t)TRIG_MAX_ANGLE) / (360 * (int32_t)TRIG_MAX_RATIO);
+  return (SWING_AMPLITUDE * blended * (int32_t)TRIG_MAX_ANGLE) / (360 * (int32_t)TRIG_MAX_RATIO);
+}
+
+// ── Hour chime haptic ─────────────────────────────────────────────────
+// Vibrate a distinctive pattern on hour change.
+// Number of short pulses = (hour % 4) + 1
+static void hour_chime(int hour) {
+  int pulses = (hour % 4) + 1;
+  // Build a vibe pattern: alternating ON/OFF durations
+  // Each pulse is 80ms vibrate + 120ms pause
+  static uint32_t segments[9]; // max 5 pulses = 9 segments (5 on + 4 off)
+  int seg_count = 0;
+  for (int i = 0; i < pulses; i++) {
+    segments[seg_count++] = 80;   // vibrate duration
+    if (i < pulses - 1) {
+      segments[seg_count++] = 120; // pause between pulses
+    }
+  }
+  VibePattern pattern = {
+    .durations = segments,
+    .num_segments = seg_count,
+  };
+  vibes_enqueue_custom_pattern(pattern);
 }
 
 // ── Drawing callback ───────────────────────────────────────────────────
@@ -89,6 +126,34 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   int bob_y = pivot.y - (bob_dist * cos_lookup(bob_trig)) / TRIG_MAX_RATIO;
   GPoint bob = GPoint(bob_x, bob_y);
 
+  // ── Tick marks at 15-second intervals on swing arc ────────────────
+  // Draw small radial marks at the bob's distance showing where
+  // second = 0, 15, 30, 45 would place the pendulum.
+#ifdef PBL_COLOR
+  graphics_context_set_stroke_color(ctx, GColorDarkGray);
+#else
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+#endif
+  graphics_context_set_stroke_width(ctx, 1);
+
+  for (int i = 0; i < NUM_TICK_MARKS; i++) {
+    int tick_sec = i * 15;  // 0, 15, 30, 45
+    int32_t tick_swing = pendulum_angle(tick_sec);
+    int32_t tick_trig  = (TRIG_MAX_ANGLE / 2) + tick_swing;
+
+    // Inner point (closer to pivot)
+    int inner_dist = bob_dist - TICK_MARK_LENGTH;
+    int ix = pivot.x + (inner_dist * sin_lookup(tick_trig)) / TRIG_MAX_RATIO;
+    int iy = pivot.y - (inner_dist * cos_lookup(tick_trig)) / TRIG_MAX_RATIO;
+
+    // Outer point (farther from pivot)
+    int outer_dist = bob_dist + TICK_MARK_LENGTH;
+    int ox = pivot.x + (outer_dist * sin_lookup(tick_trig)) / TRIG_MAX_RATIO;
+    int oy = pivot.y - (outer_dist * cos_lookup(tick_trig)) / TRIG_MAX_RATIO;
+
+    graphics_draw_line(ctx, GPoint(ix, iy), GPoint(ox, oy));
+  }
+
   // ── Trail arc (recent swing path) ───────────────────────────────
   // Draw a faint arc showing where the bob has been over the last few seconds.
 #ifdef PBL_COLOR
@@ -144,13 +209,42 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   graphics_context_set_stroke_width(ctx, 2);
   graphics_draw_circle(ctx, bob, BOB_RADIUS);
 #endif
+
+  // ── Date text inside the bob ─────────────────────────────────────
+  // Render the day number (e.g., "24") centered inside the pendulum bob
+  char day_str[4];
+  snprintf(day_str, sizeof(day_str), "%d", s_day);
+
+  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
+
+  // Text bounding box centered on the bob
+  GRect text_rect = GRect(bob.x - BOB_RADIUS, bob.y - 9, BOB_RADIUS * 2, 18);
+
+#ifdef PBL_COLOR
+  graphics_context_set_text_color(ctx, GColorBlack);
+#else
+  graphics_context_set_text_color(ctx, GColorBlack);
+#endif
+  graphics_draw_text(ctx, day_str, font, text_rect,
+                     GTextOverflowModeTrailingEllipsis,
+                     GTextAlignmentCenter, NULL);
 }
 
 // ── Tick handler ───────────────────────────────────────────────────────
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
-  s_hour   = tick_time->tm_hour;
+  int new_hour = tick_time->tm_hour;
+
+  s_hour   = new_hour;
   s_minute = tick_time->tm_min;
   s_second = tick_time->tm_sec;
+  s_day    = tick_time->tm_mday;
+
+  // Hour chime: vibrate when the hour changes
+  if ((units_changed & HOUR_UNIT) && new_hour != s_prev_hour) {
+    hour_chime(new_hour);
+    s_prev_hour = new_hour;
+  }
+
   layer_mark_dirty(s_canvas);
 }
 
@@ -168,9 +262,11 @@ static void window_load(Window *window) {
   // Seed with current time
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  s_hour   = t->tm_hour;
-  s_minute = t->tm_min;
-  s_second = t->tm_sec;
+  s_hour     = t->tm_hour;
+  s_minute   = t->tm_min;
+  s_second   = t->tm_sec;
+  s_day      = t->tm_mday;
+  s_prev_hour = t->tm_hour;
 }
 
 static void window_unload(Window *window) {
