@@ -1,11 +1,23 @@
 #include <pebble.h>
 
-static Window *s_window;
-static Layer *s_canvas;
-static TextLayer *s_phase_layer;
-static TextLayer *s_pattern_layer;
-static TextLayer *s_count_layer;
+// ---------------------------------------------------------------------------
+// Persistent storage keys
+// ---------------------------------------------------------------------------
+#define PERSIST_KEY_PATTERN    1
+#define PERSIST_KEY_FIRST_RUN  2
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+#define MIN_RADIUS 10
+#define MAX_RADIUS 55
+#define TICK_MS    100
+#define NUM_RINGS  3
+#define SB_HEIGHT  STATUS_BAR_LAYER_HEIGHT  // 16px
+
+// ---------------------------------------------------------------------------
+// Data types
+// ---------------------------------------------------------------------------
 typedef enum {
   BREATH_INHALE,
   BREATH_HOLD,
@@ -21,6 +33,9 @@ typedef struct {
   int hold2;    // 0 if no second hold
 } Pattern;
 
+// ---------------------------------------------------------------------------
+// Patterns
+// ---------------------------------------------------------------------------
 static const Pattern PATTERNS[] = {
   {"4-7-8",   4, 7, 8, 0},
   {"Box",     4, 4, 4, 4},
@@ -28,21 +43,65 @@ static const Pattern PATTERNS[] = {
 };
 #define NUM_PATTERNS 3
 
+// Session duration presets (seconds)
+static const int SESSION_DURATIONS[] = {60, 120, 300, 600};
+static const char *SESSION_LABELS[]  = {"1 min", "2 min", "5 min", "10 min"};
+#define NUM_DURATIONS 4
+
+// ---------------------------------------------------------------------------
+// UI layers
+// ---------------------------------------------------------------------------
+static Window *s_window;
+static StatusBarLayer *s_status_bar;
+static Layer *s_canvas;
+static TextLayer *s_phase_layer;
+static TextLayer *s_pattern_layer;
+static TextLayer *s_count_layer;
+static TextLayer *s_duration_layer;
+
+// Instruction overlay layers
+static Layer *s_overlay_layer;
+static TextLayer *s_instr_title;
+static TextLayer *s_instr_body;
+static bool s_show_overlay = false;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 static int s_pattern_idx = 0;
 static BreathPhase s_phase = BREATH_INHALE;
 static int s_phase_elapsed = 0;   // tenths of seconds into current phase
 static int s_phase_duration = 0;  // tenths of seconds
 static int s_cycles = 0;
 static bool s_running = false;
-static int s_circle_radius = 10;
 static char s_count_buf[16];
+static char s_dur_buf[24];
 
-#define MIN_RADIUS 10
-#define MAX_RADIUS 55
-#define TICK_MS 100
+// Session duration
+static int s_duration_idx = 0;     // index into SESSION_DURATIONS
+static int s_session_elapsed = 0;  // tenths of seconds elapsed in session
 
+// Concentric rings
+static int s_ring_radii[NUM_RINGS];
+static const int s_ring_offsets[NUM_RINGS] = {0, 8, 16}; // stagger in ticks
+
+// Haptic
+static AppTimer *s_haptic_timer;
+static int s_haptic_step = 0;
+
+// Tick timer
 static AppTimer *s_tick_timer;
 
+// ---------------------------------------------------------------------------
+// Forward declarations
+// ---------------------------------------------------------------------------
+static void tick_callback(void *data);
+static void stop_session(void);
+static void haptic_cancel(void);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 static int phase_seconds(BreathPhase phase) {
   const Pattern *p = &PATTERNS[s_pattern_idx];
   switch (phase) {
@@ -64,6 +123,63 @@ static const char *phase_name(BreathPhase phase) {
   return "";
 }
 
+// ---------------------------------------------------------------------------
+// Haptic patterns per phase
+// ---------------------------------------------------------------------------
+static void haptic_inhale_tick(void *data);
+static void haptic_exhale_tick(void *data);
+
+// Inhale: continuous gentle buzz (repeating short pulses every 400ms)
+static void haptic_inhale_tick(void *data) {
+  if (!s_running || s_phase != BREATH_INHALE) return;
+  vibes_short_pulse();
+  s_haptic_timer = app_timer_register(400, haptic_inhale_tick, NULL);
+}
+
+// Exhale: pulsing pattern (short pulse, pause, short pulse, pause...)
+static void haptic_exhale_tick(void *data) {
+  if (!s_running || s_phase != BREATH_EXHALE) return;
+  s_haptic_step++;
+  if (s_haptic_step % 2 == 1) {
+    // Pulse
+    vibes_short_pulse();
+    s_haptic_timer = app_timer_register(200, haptic_exhale_tick, NULL);
+  } else {
+    // Silence gap
+    s_haptic_timer = app_timer_register(400, haptic_exhale_tick, NULL);
+  }
+}
+
+static void haptic_cancel(void) {
+  if (s_haptic_timer) {
+    app_timer_cancel(s_haptic_timer);
+    s_haptic_timer = NULL;
+  }
+}
+
+static void haptic_start_for_phase(BreathPhase phase) {
+  haptic_cancel();
+  s_haptic_step = 0;
+  switch (phase) {
+    case BREATH_INHALE:
+      vibes_short_pulse();
+      s_haptic_timer = app_timer_register(400, haptic_inhale_tick, NULL);
+      break;
+    case BREATH_EXHALE:
+      s_haptic_step = 1; // start with a pulse
+      vibes_short_pulse();
+      s_haptic_timer = app_timer_register(200, haptic_exhale_tick, NULL);
+      break;
+    case BREATH_HOLD:
+    case BREATH_HOLD2:
+      // Silence — no vibration during hold
+      break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase management
+// ---------------------------------------------------------------------------
 static void start_phase(BreathPhase phase) {
   // Skip phases with 0 duration
   while (phase_seconds(phase) == 0) {
@@ -79,8 +195,8 @@ static void start_phase(BreathPhase phase) {
 
   text_layer_set_text(s_phase_layer, phase_name(phase));
 
-  // Vibrate at transition
-  vibes_short_pulse();
+  // Haptic guide for this phase
+  haptic_start_for_phase(phase);
 }
 
 static void next_phase(void) {
@@ -91,66 +207,144 @@ static void next_phase(void) {
   start_phase(next);
 }
 
+// ---------------------------------------------------------------------------
+// Session end
+// ---------------------------------------------------------------------------
+static void stop_session(void) {
+  s_running = false;
+  haptic_cancel();
+  if (s_tick_timer) {
+    app_timer_cancel(s_tick_timer);
+    s_tick_timer = NULL;
+  }
+
+  // Show summary
+  snprintf(s_count_buf, sizeof(s_count_buf), "Breaths: %d", s_cycles);
+  text_layer_set_text(s_count_layer, s_count_buf);
+  text_layer_set_text(s_phase_layer, "Session Done");
+
+  // Double vibe to signal end
+  static const uint32_t segments[] = {200, 100, 200};
+  VibePattern pat = { .durations = segments, .num_segments = 3 };
+  vibes_enqueue_custom_pattern(pat);
+}
+
+// ---------------------------------------------------------------------------
+// Canvas: concentric rings
+// ---------------------------------------------------------------------------
 static void canvas_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   int cx = bounds.size.w / 2;
-  int cy = bounds.size.h / 2 - 5;
+  int cy = SB_HEIGHT + (bounds.size.h - SB_HEIGHT) / 2 - 10;
 
-  // Outer ring
+  // Outer boundary ring
   graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
   graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_circle(ctx, GPoint(cx, cy), MAX_RADIUS + 2);
+  graphics_draw_circle(ctx, GPoint(cx, cy), MAX_RADIUS + 4);
 
-  // Breathing circle
-  GColor fill;
+  // Phase color
+  GColor base_color;
   switch (s_phase) {
     case BREATH_INHALE:
-      fill = PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite);
+      base_color = PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite);
       break;
     case BREATH_HOLD:
     case BREATH_HOLD2:
-      fill = PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
+      base_color = PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
       break;
     case BREATH_EXHALE:
-      fill = PBL_IF_COLOR_ELSE(GColorMagenta, GColorWhite);
+      base_color = PBL_IF_COLOR_ELSE(GColorMagenta, GColorWhite);
       break;
     default:
-      fill = GColorWhite;
+      base_color = GColorWhite;
   }
 
-  graphics_context_set_fill_color(ctx, fill);
-  graphics_fill_circle(ctx, GPoint(cx, cy), s_circle_radius);
+  // Ring colors: inner = brightest, outer = dimmest
+  // On B&W platforms all rings are white; on color we dim outer rings.
+  GColor ring_colors[NUM_RINGS];
+  ring_colors[0] = base_color;  // inner — brightest
+#ifdef PBL_COLOR
+  switch (s_phase) {
+    case BREATH_INHALE:
+      ring_colors[1] = GColorElectricBlue;
+      ring_colors[2] = GColorCadetBlue;
+      break;
+    case BREATH_HOLD:
+    case BREATH_HOLD2:
+      ring_colors[1] = GColorIcterine;
+      ring_colors[2] = GColorPastelYellow;
+      break;
+    case BREATH_EXHALE:
+      ring_colors[1] = GColorShockingPink;
+      ring_colors[2] = GColorMelon;
+      break;
+    default:
+      ring_colors[1] = GColorLightGray;
+      ring_colors[2] = GColorDarkGray;
+  }
+#else
+  ring_colors[1] = GColorWhite;
+  ring_colors[2] = GColorLightGray;
+#endif
+
+  int stroke_widths[NUM_RINGS] = {4, 2, 1};
+
+  // Draw from outermost to innermost so inner overlaps outer
+  for (int i = NUM_RINGS - 1; i >= 0; i--) {
+    if (s_ring_radii[i] > 0) {
+      graphics_context_set_stroke_color(ctx, ring_colors[i]);
+      graphics_context_set_stroke_width(ctx, stroke_widths[i]);
+      graphics_draw_circle(ctx, GPoint(cx, cy), s_ring_radii[i]);
+    }
+  }
+
+  // Small filled circle at center for visual anchor
+  graphics_context_set_fill_color(ctx, base_color);
+  int fill_r = s_ring_radii[0] > 4 ? s_ring_radii[0] - 3 : s_ring_radii[0];
+  if (fill_r < 2) fill_r = 2;
+  graphics_fill_circle(ctx, GPoint(cx, cy), fill_r);
 
   // Cycle count
   snprintf(s_count_buf, sizeof(s_count_buf), "Breaths: %d", s_cycles);
   text_layer_set_text(s_count_layer, s_count_buf);
 }
 
+// ---------------------------------------------------------------------------
+// Tick timer
+// ---------------------------------------------------------------------------
 static void tick_callback(void *data) {
   if (!s_running) return;
 
   s_phase_elapsed++;
+  s_session_elapsed++;
 
-  // Calculate circle radius based on phase
-  float progress = (float)s_phase_elapsed / (float)s_phase_duration;
-  if (progress > 1.0f) progress = 1.0f;
+  // Check session end
+  if (s_session_elapsed >= SESSION_DURATIONS[s_duration_idx] * 10) {
+    stop_session();
+    return;
+  }
 
-  switch (s_phase) {
-    case BREATH_INHALE:
-      s_circle_radius = MIN_RADIUS + (int)((MAX_RADIUS - MIN_RADIUS) * progress);
-      break;
-    case BREATH_HOLD:
-    case BREATH_HOLD2:
-      // Stay at current size
-      if (s_phase == BREATH_HOLD) {
-        s_circle_radius = MAX_RADIUS;
-      } else {
-        s_circle_radius = MIN_RADIUS;
-      }
-      break;
-    case BREATH_EXHALE:
-      s_circle_radius = MAX_RADIUS - (int)((MAX_RADIUS - MIN_RADIUS) * progress);
-      break;
+  // Update concentric ring radii
+  for (int i = 0; i < NUM_RINGS; i++) {
+    int adjusted = s_phase_elapsed - s_ring_offsets[i];
+    if (adjusted < 0) adjusted = 0;
+    float prog = (float)adjusted / (float)s_phase_duration;
+    if (prog > 1.0f) prog = 1.0f;
+
+    switch (s_phase) {
+      case BREATH_INHALE:
+        s_ring_radii[i] = MIN_RADIUS + (int)((MAX_RADIUS - MIN_RADIUS) * prog);
+        break;
+      case BREATH_HOLD:
+        s_ring_radii[i] = MAX_RADIUS;
+        break;
+      case BREATH_HOLD2:
+        s_ring_radii[i] = MIN_RADIUS;
+        break;
+      case BREATH_EXHALE:
+        s_ring_radii[i] = MAX_RADIUS - (int)((MAX_RADIUS - MIN_RADIUS) * prog);
+        break;
+    }
   }
 
   layer_mark_dirty(s_canvas);
@@ -162,22 +356,65 @@ static void tick_callback(void *data) {
   s_tick_timer = app_timer_register(TICK_MS, tick_callback, NULL);
 }
 
+// ---------------------------------------------------------------------------
+// Overlay (first-launch instructions)
+// ---------------------------------------------------------------------------
+static void overlay_update(Layer *layer, GContext *ctx) {
+  if (!s_show_overlay) return;
+  GRect bounds = layer_get_bounds(layer);
+
+  // Semi-transparent background (solid black on B&W)
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+}
+
+static void dismiss_overlay(void) {
+  if (!s_show_overlay) return;
+  s_show_overlay = false;
+  layer_set_hidden(s_overlay_layer, true);
+  layer_set_hidden(text_layer_get_layer(s_instr_title), true);
+  layer_set_hidden(text_layer_get_layer(s_instr_body), true);
+  // Mark that we've shown the overlay
+  persist_write_bool(PERSIST_KEY_FIRST_RUN, false);
+}
+
+// ---------------------------------------------------------------------------
+// Click handlers
+// ---------------------------------------------------------------------------
 static void select_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
+
   s_running = !s_running;
   if (s_running) {
-    s_circle_radius = MIN_RADIUS;
+    for (int i = 0; i < NUM_RINGS; i++) s_ring_radii[i] = MIN_RADIUS;
+    s_cycles = 0;
+    s_session_elapsed = 0;
     start_phase(BREATH_INHALE);
+    // Hide duration label while running
+    text_layer_set_text(s_duration_layer, "");
     s_tick_timer = app_timer_register(TICK_MS, tick_callback, NULL);
   } else {
+    stop_session();
     text_layer_set_text(s_phase_layer, "Paused");
-    if (s_tick_timer) {
-      app_timer_cancel(s_tick_timer);
-      s_tick_timer = NULL;
-    }
+    // Show duration again
+    snprintf(s_dur_buf, sizeof(s_dur_buf), "Session: %s", SESSION_LABELS[s_duration_idx]);
+    text_layer_set_text(s_duration_layer, s_dur_buf);
   }
 }
 
+static void select_long_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
+  if (s_running) return;  // don't change duration while running
+
+  s_duration_idx = (s_duration_idx + 1) % NUM_DURATIONS;
+  snprintf(s_dur_buf, sizeof(s_dur_buf), "Session: %s", SESSION_LABELS[s_duration_idx]);
+  text_layer_set_text(s_duration_layer, s_dur_buf);
+  vibes_short_pulse();
+}
+
 static void up_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
+
   s_pattern_idx = (s_pattern_idx + 1) % NUM_PATTERNS;
   text_layer_set_text(s_pattern_layer, PATTERNS[s_pattern_idx].name);
   if (s_running) {
@@ -186,6 +423,8 @@ static void up_click(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void down_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
+
   s_pattern_idx = (s_pattern_idx + NUM_PATTERNS - 1) % NUM_PATTERNS;
   text_layer_set_text(s_pattern_layer, PATTERNS[s_pattern_idx].name);
   if (s_running) {
@@ -195,18 +434,41 @@ static void down_click(ClickRecognizerRef recognizer, void *context) {
 
 static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click, NULL);
   window_single_click_subscribe(BUTTON_ID_UP, up_click);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
 }
 
+// ---------------------------------------------------------------------------
+// Bluetooth disconnect alert
+// ---------------------------------------------------------------------------
+static void bt_handler(bool connected) {
+  if (!connected) {
+    static const uint32_t segments[] = {200, 100, 200, 100, 200};
+    VibePattern pat = { .durations = segments, .num_segments = 5 };
+    vibes_enqueue_custom_pattern(pat);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Window load / unload
+// ---------------------------------------------------------------------------
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
 
   window_set_background_color(window, GColorBlack);
 
-  // Pattern name at top
-  s_pattern_layer = text_layer_create(GRect(0, 2, bounds.size.w, 20));
+  // Status bar at top with dotted separator
+  s_status_bar = status_bar_layer_create();
+  status_bar_layer_set_colors(s_status_bar, GColorBlack,
+                              PBL_IF_COLOR_ELSE(GColorWhite, GColorWhite));
+  status_bar_layer_set_separator_mode(s_status_bar,
+                                       StatusBarLayerSeparatorModeDotted);
+  layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
+
+  // Pattern name — shifted down by SB_HEIGHT
+  s_pattern_layer = text_layer_create(GRect(0, SB_HEIGHT + 2, bounds.size.w, 20));
   text_layer_set_background_color(s_pattern_layer, GColorClear);
   text_layer_set_text_color(s_pattern_layer, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
   text_layer_set_font(s_pattern_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
@@ -214,12 +476,22 @@ static void window_load(Window *window) {
   text_layer_set_text(s_pattern_layer, PATTERNS[s_pattern_idx].name);
   layer_add_child(root, text_layer_get_layer(s_pattern_layer));
 
-  // Canvas for circle
+  // Session duration label
+  s_duration_layer = text_layer_create(GRect(0, SB_HEIGHT + 16, bounds.size.w, 20));
+  text_layer_set_background_color(s_duration_layer, GColorClear);
+  text_layer_set_text_color(s_duration_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_font(s_duration_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_duration_layer, GTextAlignmentCenter);
+  snprintf(s_dur_buf, sizeof(s_dur_buf), "Session: %s", SESSION_LABELS[s_duration_idx]);
+  text_layer_set_text(s_duration_layer, s_dur_buf);
+  layer_add_child(root, text_layer_get_layer(s_duration_layer));
+
+  // Canvas for rings
   s_canvas = layer_create(bounds);
   layer_set_update_proc(s_canvas, canvas_update);
   layer_add_child(root, s_canvas);
 
-  // Phase text
+  // Phase text — shifted up slightly to account for status bar
   s_phase_layer = text_layer_create(GRect(0, bounds.size.h - 48, bounds.size.w, 24));
   text_layer_set_background_color(s_phase_layer, GColorClear);
   text_layer_set_text_color(s_phase_layer, GColorWhite);
@@ -235,16 +507,77 @@ static void window_load(Window *window) {
   text_layer_set_font(s_count_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_count_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_count_layer));
+
+  // --- First-launch instruction overlay ---
+  if (s_show_overlay) {
+    // Full-screen overlay background
+    s_overlay_layer = layer_create(bounds);
+    layer_set_update_proc(s_overlay_layer, overlay_update);
+    layer_add_child(root, s_overlay_layer);
+
+    // Title
+    s_instr_title = text_layer_create(GRect(10, SB_HEIGHT + 20, bounds.size.w - 20, 30));
+    text_layer_set_background_color(s_instr_title, GColorClear);
+    text_layer_set_text_color(s_instr_title, GColorWhite);
+    text_layer_set_font(s_instr_title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+    text_layer_set_text_alignment(s_instr_title, GTextAlignmentCenter);
+    text_layer_set_text(s_instr_title, "Breathe");
+    layer_add_child(root, text_layer_get_layer(s_instr_title));
+
+    // Body
+    s_instr_body = text_layer_create(GRect(8, SB_HEIGHT + 52, bounds.size.w - 16, 100));
+    text_layer_set_background_color(s_instr_body, GColorClear);
+    text_layer_set_text_color(s_instr_body, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+    text_layer_set_font(s_instr_body, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+    text_layer_set_text_alignment(s_instr_body, GTextAlignmentCenter);
+    text_layer_set_text(s_instr_body,
+      "SEL: Start/Stop\n"
+      "UP/DN: Pattern\n"
+      "Long SEL: Duration\n"
+      "Press any button...");
+    layer_add_child(root, text_layer_get_layer(s_instr_body));
+  }
+
+  // Initialize ring radii
+  for (int i = 0; i < NUM_RINGS; i++) s_ring_radii[i] = MIN_RADIUS;
 }
 
 static void window_unload(Window *window) {
   text_layer_destroy(s_phase_layer);
   text_layer_destroy(s_pattern_layer);
   text_layer_destroy(s_count_layer);
+  text_layer_destroy(s_duration_layer);
+  status_bar_layer_destroy(s_status_bar);
   layer_destroy(s_canvas);
+  if (s_overlay_layer) {
+    layer_destroy(s_overlay_layer);
+    text_layer_destroy(s_instr_title);
+    text_layer_destroy(s_instr_body);
+  }
 }
 
+// ---------------------------------------------------------------------------
+// Init / Deinit
+// ---------------------------------------------------------------------------
 static void init(void) {
+  // Restore persisted pattern index
+  if (persist_exists(PERSIST_KEY_PATTERN)) {
+    s_pattern_idx = persist_read_int(PERSIST_KEY_PATTERN);
+    if (s_pattern_idx < 0 || s_pattern_idx >= NUM_PATTERNS) {
+      s_pattern_idx = 0;
+    }
+  }
+
+  // Check first-launch
+  if (!persist_exists(PERSIST_KEY_FIRST_RUN) || persist_read_bool(PERSIST_KEY_FIRST_RUN)) {
+    s_show_overlay = true;
+  }
+
+  // Subscribe to Bluetooth connection changes
+  connection_service_subscribe((ConnectionHandlers) {
+    .pebble_app_connection_handler = bt_handler,
+  });
+
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -255,7 +588,13 @@ static void init(void) {
 }
 
 static void deinit(void) {
+  haptic_cancel();
   if (s_tick_timer) app_timer_cancel(s_tick_timer);
+
+  // Persist preferred pattern
+  persist_write_int(PERSIST_KEY_PATTERN, s_pattern_idx);
+
+  connection_service_unsubscribe();
   window_destroy(s_window);
 }
 
