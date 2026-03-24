@@ -1,0 +1,22 @@
+{
+  "name": "dice-roller",
+  "author": "Sambit Biswas",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Dice Roller",
+    "uuid": "a1b2c3d4-7777-4000-8000-000000000007",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["diorite", "basalt", "emery"],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": {},
+    "resources": {
+      "media": []
+    }
+  }
+}
