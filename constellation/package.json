@@ -1,0 +1,44 @@
+{
+  "author": "Sambit Biswas",
+  "company": "Sambit Biswas",
+  "wpiVersion": "2.0",
+  "sdkVersion": "3",
+  "displayName": "Constellation",
+  "name": "constellation",
+  "uuid": "a1b2c3d4-e006-4000-8000-000000000e06",
+  "version": "1.0.0",
+  "description": "A dreamy star-field watchface where constellations tell the time",
+  "enableMultiJS": false,
+  "targetPlatforms": [
+    "basalt",
+    "diorite",
+    "emery"
+  ],
+  "type": "watchface",
+  "watchapp": {
+    "watchface": true
+  },
+  "messageKeys": {},
+  "resources": {
+    "media": []
+  },
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Constellation",
+    "uuid": "a1b2c3d4-e006-4000-8000-000000000e06",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": [
+      "basalt",
+      "diorite",
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": true
+    },
+    "messageKeys": {},
+    "resources": {
+      "media": []
+    }
+  }
+}
