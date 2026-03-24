@@ -103,13 +103,13 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // Draw needle (north = red, south = white)
   gpath_move_to(s_needle_path, center);
-  gpath_set_rotation(s_needle_path, 0); // needle always points up, dial rotates
+  gpath_rotate_to(s_needle_path, 0); // needle always points up, dial rotates
 
   graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
   gpath_draw_filled(ctx, s_needle_path);
 
   gpath_move_to(s_south_path, center);
-  gpath_set_rotation(s_south_path, 0);
+  gpath_rotate_to(s_south_path, 0);
   graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
   gpath_draw_filled(ctx, s_south_path);
 
