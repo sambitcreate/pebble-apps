@@ -112,7 +112,6 @@ static void die_layer_update(Layer *layer, GContext *ctx) {
 
 static void update_history_text(void) {
   s_history_buf[0] = '\0';
-  int start = s_history_count > 5 ? s_history_count - 5 : 0;
   int count = s_history_count > 5 ? 5 : s_history_count;
   for (int i = 0; i < count; i++) {
     char tmp[8];
