@@ -155,7 +155,7 @@ if command -v pebble &> /dev/null; then
         [ ! -f "$app_dir/src/main.c" ] && continue
 
         cd "$app_dir"
-        if pebble build 2>&1 | tail -1 | grep -q "build succeeded"; then
+        if pebble build 2>&1 | grep -q "finished successfully"; then
             echo -e "  ${GREEN}PASS${NC}  $app — build succeeded"
             PASS=$((PASS + 1))
         else
