@@ -22,21 +22,24 @@ Single-file C watchface (`src/main.c`) with no external resources.
 
 | Element              | Description                                                                 |
 |----------------------|-----------------------------------------------------------------------------|
-| Background stars     | 35 small dots (1-2 px) at deterministic positions; ~20% twinkle each second |
+| Background stars     | 35 dots with 3 brightness levels (1px dim, 2px normal, 3px bright); ~33% cycle each second |
 | Hour markers         | 12 dots on a 60 px radius circle; current hour is larger and red (color)    |
 | Constellation lines  | 3 line segments connecting hour-marker dots; pattern changes each hour      |
-| Shooting star        | Short streak at the current minute's angular position on the outer rim      |
-| Digital time         | GOTHIC_14 text at the bottom of the screen                                  |
+| Constellation name   | Name of current hour's zodiac constellation shown alongside time text       |
+| Shooting star        | Animated arc with 5-point fading trail; triggers at second 30 each minute (~2s duration) |
+| Pole star            | Fixed star at top center; size/color reflects battery percentage            |
+| Digital time         | GOTHIC_14 text at the bottom: "HH:MM  ConstellationName"                   |
 
 ### Color mapping
 
-| Element           | Color (Basalt/Emery) | B&W (Diorite) |
-|-------------------|----------------------|---------------|
-| Stars             | White                | White          |
-| Constellation     | Cyan                 | White          |
-| Shooting star     | Yellow               | White          |
-| Current hour dot  | Red                  | White          |
-| Time text         | Light Gray           | White          |
+| Element           | Color (Basalt/Emery)                      | B&W (Diorite) |
+|-------------------|-------------------------------------------|---------------|
+| Stars             | White                                     | White          |
+| Constellation     | Cyan                                      | White          |
+| Shooting star     | ChromeYellow -> Yellow -> White (trail)    | White          |
+| Current hour dot  | Red                                       | White          |
+| Pole star         | Yellow (>60%), ChromeYellow (>20%), Red    | White          |
+| Time text         | Light Gray                                | White          |
 
 ### Platforms
 
@@ -48,4 +51,8 @@ All data is stack/static -- no heap allocations beyond Pebble SDK objects (Windo
 
 ### Tick subscription
 
-Subscribed to `SECOND_UNIT` so background stars twinkle every second.
+Subscribed to `SECOND_UNIT` so background stars twinkle every second. Shooting star animation uses `AppTimer` at ~66ms intervals (~15 fps).
+
+### Battery service
+
+Subscribed to `battery_state_service` to update the pole star brightness/size in real time.
