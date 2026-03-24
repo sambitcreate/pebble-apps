@@ -85,7 +85,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // Cardinal labels on the dial (rotate with heading)
   const char *labels[] = {"N", "E", "S", "W"};
-  int label_degs[] = {0, 90, 180, 270};
+  const int label_degs[] = {0, 90, 180, 270};
   for (int i = 0; i < 4; i++) {
     int32_t angle = DEG_TO_TRIGANGLE(label_degs[i] - s_heading);
     int r = 40;
