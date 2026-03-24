@@ -1,7 +1,7 @@
 #include <pebble.h>
 
 // --- Constants ---
-#define TRAIL_LENGTH 5
+#define TRAIL_LENGTH 8
 
 #define HOUR_ORBIT_RADIUS   55
 #define MINUTE_ORBIT_RADIUS 38
@@ -22,12 +22,16 @@ typedef struct {
 // --- Globals ---
 static Window *s_window;
 static Layer *s_canvas_layer;
+static TextLayer *s_date_layer;
 
 static Trail s_hour_trail;
 static Trail s_minute_trail;
 static Trail s_second_trail;
 
 static int s_hours, s_minutes, s_seconds;
+
+static bool s_bt_connected = true;
+static char s_date_buf[16];
 
 // --- Helpers ---
 
@@ -86,7 +90,10 @@ static void draw_trail(GContext *ctx, Trail *trail, int base_radius, GColor colo
 #if defined(PBL_COLOR)
     // Reduce alpha-like effect by using darker shades for older dots.
     // We approximate fading by adjusting the color channels.
-    if (age >= 3) {
+    if (age >= 5) {
+      // Very old trail points: barely visible
+      graphics_context_set_fill_color(ctx, GColorDarkGray);
+    } else if (age >= 3) {
       GColor dim = GColorDarkGray;
       graphics_context_set_fill_color(ctx, dim);
     } else if (age >= 2) {
@@ -107,6 +114,25 @@ static void draw_trail(GContext *ctx, Trail *trail, int base_radius, GColor colo
   }
 }
 
+// Draw battery arc around the outermost orbit ring.
+static void draw_battery_arc(GContext *ctx, GPoint center) {
+  BatteryChargeState charge = battery_state_service_peek();
+  int end_angle = charge.charge_percent * 360 / 100;
+  GColor color;
+#ifdef PBL_COLOR
+  if (charge.charge_percent > 30) color = GColorGreen;
+  else if (charge.charge_percent > 20) color = GColorYellow;
+  else color = GColorRed;
+#else
+  color = GColorWhite;
+#endif
+  graphics_context_set_stroke_color(ctx, color);
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_draw_arc(ctx,
+      GRect(center.x - 62, center.y - 62, 124, 124),
+      GOvalScaleModeFitCircle, 0, DEG_TO_TRIGANGLE(end_angle));
+}
+
 // --- Canvas update ---
 static void canvas_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
@@ -115,6 +141,9 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   // Background
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+
+  // Draw battery arc (behind orbit rings).
+  draw_battery_arc(ctx, center);
 
   // Draw orbit path rings (faint).
 #if defined(PBL_COLOR)
@@ -166,9 +195,44 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, second_color);
   draw_dot(ctx, second_pt, SECOND_DOT_RADIUS);
 
-  // Center dot.
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  // Center dot: red if BT disconnected, white otherwise.
+  if (!s_bt_connected) {
+#if defined(PBL_COLOR)
+    graphics_context_set_fill_color(ctx, GColorRed);
+#else
+    graphics_context_set_fill_color(ctx, GColorWhite);
+#endif
+  } else {
+    graphics_context_set_fill_color(ctx, GColorWhite);
+  }
   draw_dot(ctx, center, CENTER_DOT_RADIUS);
+
+  // Draw "!" near center when BT disconnected.
+  if (!s_bt_connected) {
+#if defined(PBL_COLOR)
+    graphics_context_set_text_color(ctx, GColorRed);
+#else
+    graphics_context_set_text_color(ctx, GColorWhite);
+#endif
+    graphics_draw_text(ctx, "!",
+        fonts_get_system_font(FONT_KEY_GOTHIC_14),
+        GRect(center.x + 4, center.y - 10, 14, 14),
+        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+  }
+}
+
+// --- Bluetooth handler ---
+static void bluetooth_handler(bool connected) {
+  s_bt_connected = connected;
+  if (!connected) {
+    vibes_double_pulse();
+  }
+  layer_mark_dirty(s_canvas_layer);
+}
+
+// --- Battery handler ---
+static void battery_handler(BatteryChargeState charge) {
+  layer_mark_dirty(s_canvas_layer);
 }
 
 // --- Tick handler ---
@@ -176,6 +240,11 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   s_hours   = tick_time->tm_hour;
   s_minutes = tick_time->tm_min;
   s_seconds = tick_time->tm_sec;
+
+  // Update date text.
+  static const char *days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+  snprintf(s_date_buf, sizeof(s_date_buf), "%s %d", days[tick_time->tm_wday], tick_time->tm_mday);
+  text_layer_set_text(s_date_layer, s_date_buf);
 
   // Compute current positions for trail tracking.
   Layer *window_layer = window_get_root_layer(s_window);
@@ -207,6 +276,15 @@ static void window_load(Window *window) {
   layer_set_update_proc(s_canvas_layer, canvas_update_proc);
   layer_add_child(window_layer, s_canvas_layer);
 
+  // Create date TextLayer at bottom of screen.
+  int date_height = 22;
+  s_date_layer = text_layer_create(GRect(0, bounds.size.h - date_height - 2, bounds.size.w, date_height));
+  text_layer_set_background_color(s_date_layer, GColorClear);
+  text_layer_set_text_color(s_date_layer, GColorWhite);
+  text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
+  layer_add_child(window_layer, text_layer_get_layer(s_date_layer));
+
   // Initialize trails to empty.
   memset(&s_hour_trail, 0, sizeof(s_hour_trail));
   memset(&s_minute_trail, 0, sizeof(s_minute_trail));
@@ -218,6 +296,11 @@ static void window_load(Window *window) {
   s_hours   = t->tm_hour;
   s_minutes = t->tm_min;
   s_seconds = t->tm_sec;
+
+  // Set initial date text.
+  static const char *days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+  snprintf(s_date_buf, sizeof(s_date_buf), "%s %d", days[t->tm_wday], t->tm_mday);
+  text_layer_set_text(s_date_layer, s_date_buf);
 
   // Pre-fill trails with current position so we don't start empty.
   GPoint center = grect_center_point(&bounds);
@@ -235,10 +318,14 @@ static void window_load(Window *window) {
     trail_push(&s_minute_trail, minute_pt);
     trail_push(&s_second_trail, second_pt);
   }
+
+  // Initialize BT state.
+  s_bt_connected = connection_service_peek_pebble_app_connection();
 }
 
 static void window_unload(Window *window) {
   layer_destroy(s_canvas_layer);
+  text_layer_destroy(s_date_layer);
 }
 
 // --- App lifecycle ---
@@ -252,10 +339,16 @@ static void init(void) {
   window_stack_push(s_window, true);
 
   tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+  battery_state_service_subscribe(battery_handler);
+  connection_service_subscribe((ConnectionHandlers) {
+    .pebble_app_connection_handler = bluetooth_handler,
+  });
 }
 
 static void deinit(void) {
   tick_timer_service_unsubscribe();
+  battery_state_service_unsubscribe();
+  connection_service_unsubscribe();
   window_destroy(s_window);
 }
 
