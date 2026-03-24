@@ -1,0 +1,22 @@
+{
+  "name": "compass",
+  "author": "Sambit Biswas",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Compass",
+    "uuid": "a1b2c3d4-dddd-4000-8000-00000000000d",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["diorite", "basalt", "emery"],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": {},
+    "resources": {
+      "media": []
+    }
+  }
+}
