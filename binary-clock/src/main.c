@@ -8,14 +8,22 @@ static TextLayer *s_time_layer;
 // Bit weights top to bottom: 8, 4, 2, 1
 
 #define DOT_RADIUS 6
-#define PAIR_COL_SPACING 16   // spacing within H, M, S pairs
-#define PAIR_GAP 24           // gap between pairs (for colons)
+#define PAIR_COL_SPACING 16
+#define PAIR_GAP 24
 #define ROW_SPACING 22
 #define ROWS 4
 #define COLS 6
 
+#define STORAGE_KEY_SHOW_DIGITAL 1
+#define MSG_KEY_SHOW_DIGITAL 0
+
 static int s_digits[COLS];
 static char s_time_buf[12];
+static bool s_show_digital = true;
+
+static void apply_digital_visibility(void) {
+  layer_set_hidden(text_layer_get_layer(s_time_layer), !s_show_digital);
+}
 
 static void update_time(void) {
   time_t now = time(NULL);
@@ -33,9 +41,7 @@ static void update_time(void) {
   text_layer_set_text(s_time_layer, s_time_buf);
 }
 
-// Get the x position for a column, with proper pair grouping
 static int col_x(int col, int x_origin) {
-  // Columns are grouped in pairs: [0,1] [2,3] [4,5]
   int pair = col / 2;
   int within = col % 2;
   return x_origin + pair * (2 * PAIR_COL_SPACING + PAIR_GAP) + within * PAIR_COL_SPACING;
@@ -44,23 +50,16 @@ static int col_x(int col, int x_origin) {
 static void canvas_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
 
-  // Background
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
-  // Calculate total grid dimensions for centering
-  // Width: 3 pairs of 2 cols each, with gaps between pairs
-  // col5_x - col0_x = 2*(2*PAIR_COL_SPACING + PAIR_GAP) + PAIR_COL_SPACING
   int grid_w = 2 * (2 * PAIR_COL_SPACING + PAIR_GAP) + PAIR_COL_SPACING;
-  int grid_h = (ROWS - 1) * ROW_SPACING;
-
   int x_origin = (bounds.size.w - grid_w) / 2;
-  int y_origin = 20;  // top margin for header area
+  int y_origin = 20;
 
-  // Bit weights top to bottom: 8, 4, 2, 1
   const int weights[ROWS] = {8, 4, 2, 1};
 
-  // Draw column header labels: H  H : M  M : S  S
+  // Column header labels
   graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
   const char *headers[] = {"H", "H", "M", "M", "S", "S"};
   for (int col = 0; col < COLS; col++) {
@@ -72,7 +71,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                        GTextAlignmentCenter, NULL);
   }
 
-  // Draw row weight labels on the left
+  // Row weight labels
   const char *weight_labels[] = {"8", "4", "2", "1"};
   for (int row = 0; row < ROWS; row++) {
     int y = y_origin + row * ROW_SPACING;
@@ -83,32 +82,25 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                        GTextAlignmentRight, NULL);
   }
 
-  // Draw dots
+  // Dots
   for (int col = 0; col < COLS; col++) {
     int x = col_x(col, x_origin);
-
     for (int row = 0; row < ROWS; row++) {
       int y = y_origin + row * ROW_SPACING;
       GPoint center = GPoint(x, y);
-
       bool bit_on = (s_digits[col] & weights[row]) != 0;
 
-      // Tens columns (0, 2, 4) never use the 8-bit
-      // H tens (col 0) also never uses the 4-bit (max value 2)
       bool valid = true;
       if ((col == 0 || col == 2 || col == 4) && row == 0) valid = false;
-      if (col == 0 && row == 1) valid = false;  // H tens max=2, no 4-bit
+      if (col == 0 && row == 1) valid = false;
 
       if (!valid) {
-        // Tiny dim dot for impossible position
         graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorDarkGray));
         graphics_fill_circle(ctx, center, 2);
       } else if (bit_on) {
-        // Lit dot
         graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
         graphics_fill_circle(ctx, center, DOT_RADIUS);
       } else {
-        // Unlit dot (outline only)
         graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGreen, GColorLightGray));
         graphics_context_set_stroke_width(ctx, 1);
         graphics_draw_circle(ctx, center, DOT_RADIUS);
@@ -116,10 +108,9 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     }
   }
 
-  // Draw colon separators between pairs
+  // Colon separators
   graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
   for (int pair = 0; pair < 2; pair++) {
-    // Colon goes between col (pair*2+1) and col ((pair+1)*2)
     int left_x = col_x(pair * 2 + 1, x_origin);
     int right_x = col_x((pair + 1) * 2, x_origin);
     int colon_x = (left_x + right_x) / 2;
@@ -135,6 +126,20 @@ static void tick_handler(struct tm *tick_time, TimeUnits changed) {
   layer_mark_dirty(s_canvas);
 }
 
+// AppMessage: receive config from phone
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *show_digital_t = dict_find(iter, MSG_KEY_SHOW_DIGITAL);
+  if (show_digital_t) {
+    s_show_digital = (show_digital_t->value->int32 != 0);
+    persist_write_bool(STORAGE_KEY_SHOW_DIGITAL, s_show_digital);
+    apply_digital_visibility();
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
@@ -143,13 +148,19 @@ static void window_load(Window *window) {
   layer_set_update_proc(s_canvas, canvas_update);
   layer_add_child(root, s_canvas);
 
-  // Digital time at bottom for quick reading
+  // Digital time at bottom
   s_time_layer = text_layer_create(GRect(0, bounds.size.h - 36, bounds.size.w, 30));
   text_layer_set_background_color(s_time_layer, GColorClear);
   text_layer_set_text_color(s_time_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
   text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_time_layer));
+
+  // Load saved setting
+  if (persist_exists(STORAGE_KEY_SHOW_DIGITAL)) {
+    s_show_digital = persist_read_bool(STORAGE_KEY_SHOW_DIGITAL);
+  }
+  apply_digital_visibility();
 
   update_time();
 }
@@ -168,6 +179,11 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
   tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+
+  // Set up AppMessage for config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 }
 
 static void deinit(void) {
