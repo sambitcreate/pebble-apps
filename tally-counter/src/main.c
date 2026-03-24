@@ -1,54 +1,272 @@
 #include <pebble.h>
 
-#define STORAGE_KEY_COUNT 1
+// ── Storage keys ──
+#define STORAGE_KEY_COUNT   1
+#define STORAGE_KEY_GOAL    2
+#define STORAGE_KEY_HISTORY 3   // 7 ints (today + 6 previous days)
+#define STORAGE_KEY_DAY     4   // day-of-year when last saved
 
+// ── Goal presets ──
+static const int GOAL_OPTIONS[] = {0, 10, 25, 50, 100, 250, 500, 1000};
+#define NUM_GOAL_OPTIONS 8
+
+// ── History ──
+#define HISTORY_DAYS 7
+
+// ── UI layers ──
 static Window *s_window;
+static StatusBarLayer *s_status_bar;
+static Layer *s_canvas_layer;
 static TextLayer *s_count_layer;
-static TextLayer *s_label_layer;
+static TextLayer *s_circle_label_layer;   // "x1", "x2" etc
+static TextLayer *s_goal_layer;           // "Goal: 100"
+static TextLayer *s_yesterday_layer;      // "Yesterday: 42"
 static TextLayer *s_hint_layer;
-static Layer *s_bar_layer;
+static TextLayer *s_overlay_layer;        // first-launch overlay
 
+// ── State ──
 static int s_count = 0;
-static char s_count_buf[12];
+static int s_goal_index = 0;              // index into GOAL_OPTIONS
+static int s_history[HISTORY_DAYS];       // [0]=today, [1]=yesterday, ...
+static int s_last_day = -1;              // day-of-year last saved
+static bool s_first_launch = false;
+static bool s_show_overlay = false;
+static bool s_flash_active = false;
 
-static void save_count(void) {
-  persist_write_int(STORAGE_KEY_COUNT, s_count);
+static char s_count_buf[12];
+static char s_circle_buf[12];
+static char s_goal_buf[20];
+static char s_yesterday_buf[24];
+
+// ── BT state ──
+static bool s_bt_connected = true;
+
+// ── Flash timer ──
+static AppTimer *s_flash_timer = NULL;
+
+// ── Forward declarations ──
+static void update_display(void);
+static void save_all(void);
+
+// ──────────────────────────────────────────────
+// Persistence
+// ──────────────────────────────────────────────
+
+static int current_day_of_year(void) {
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+  return t->tm_yday;
 }
 
-static void load_count(void) {
+static void load_data(void) {
+  // Count
   if (persist_exists(STORAGE_KEY_COUNT)) {
     s_count = persist_read_int(STORAGE_KEY_COUNT);
   } else {
     s_count = 0;
+    s_first_launch = true;
+  }
+
+  // Goal
+  if (persist_exists(STORAGE_KEY_GOAL)) {
+    s_goal_index = persist_read_int(STORAGE_KEY_GOAL);
+    if (s_goal_index < 0 || s_goal_index >= NUM_GOAL_OPTIONS) {
+      s_goal_index = 0;
+    }
+  }
+
+  // History
+  if (persist_exists(STORAGE_KEY_HISTORY)) {
+    persist_read_data(STORAGE_KEY_HISTORY, s_history, sizeof(s_history));
+  } else {
+    memset(s_history, 0, sizeof(s_history));
+  }
+
+  // Day tracking — shift history on new day
+  if (persist_exists(STORAGE_KEY_DAY)) {
+    s_last_day = persist_read_int(STORAGE_KEY_DAY);
+  }
+
+  int today = current_day_of_year();
+  if (s_last_day >= 0 && s_last_day != today) {
+    // Calculate how many days have passed (handle year wrap)
+    int days_passed = today - s_last_day;
+    if (days_passed < 0) days_passed += 365;
+    if (days_passed > HISTORY_DAYS) days_passed = HISTORY_DAYS;
+
+    // Shift history forward
+    for (int i = HISTORY_DAYS - 1; i >= days_passed; i--) {
+      s_history[i] = s_history[i - days_passed];
+    }
+    // Fill gap days with 0 (except today's slot)
+    for (int i = 1; i < days_passed && i < HISTORY_DAYS; i++) {
+      s_history[i] = 0;
+    }
+    // Today's count stored yesterday; now stored in s_history[0] already shifted
+    // Start fresh today
+    s_history[0] = s_count;
+    // Actually reset today's running count? No — keep accumulating.
+    // s_history[0] will be updated on every save with current count.
+  }
+
+  s_last_day = today;
+}
+
+static void save_all(void) {
+  persist_write_int(STORAGE_KEY_COUNT, s_count);
+  persist_write_int(STORAGE_KEY_GOAL, s_goal_index);
+
+  // Update today's history slot
+  s_history[0] = s_count;
+  persist_write_data(STORAGE_KEY_HISTORY, s_history, sizeof(s_history));
+  persist_write_int(STORAGE_KEY_DAY, current_day_of_year());
+}
+
+// ──────────────────────────────────────────────
+// Drawing
+// ──────────────────────────────────────────────
+
+static void canvas_update(Layer *layer, GContext *ctx) {
+  GRect bounds = layer_get_bounds(layer);
+  GPoint center = grect_center_point(&bounds);
+  // Shift center down slightly to account for status bar
+  center.y += 4;
+
+  int radius = 55;
+  GRect arc_rect = GRect(center.x - radius, center.y - radius,
+                         radius * 2, radius * 2);
+
+  // ── Background ring ──
+  graphics_context_set_stroke_color(ctx,
+    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  graphics_context_set_stroke_width(ctx, 4);
+  graphics_draw_arc(ctx, arc_rect, GOvalScaleModeFitCircle,
+                    0, TRIG_MAX_ANGLE);
+
+  // ── Progress arc ──
+  int angle = (s_count % 100) * 360 / 100;
+  GColor arc_color;
+  if (s_flash_active) {
+    arc_color = PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
+  } else {
+    arc_color = PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite);
+  }
+  graphics_context_set_stroke_color(ctx, arc_color);
+  graphics_context_set_stroke_width(ctx, 4);
+  if (angle > 0) {
+    graphics_draw_arc(ctx, arc_rect, GOvalScaleModeFitCircle,
+                      0, DEG_TO_TRIGANGLE(angle));
+  }
+
+  // ── Goal marker (small tick on the ring) ──
+  if (GOAL_OPTIONS[s_goal_index] > 0) {
+    int goal_val = GOAL_OPTIONS[s_goal_index];
+    int goal_angle_deg = (goal_val % 100) * 360 / 100;
+    if (goal_angle_deg == 0 && goal_val > 0) goal_angle_deg = 360;
+    int32_t goal_trig = DEG_TO_TRIGANGLE(goal_angle_deg);
+
+    // Draw a small dot on the ring at the goal position
+    int dot_r = radius;
+    int dot_x = center.x + (dot_r * sin_lookup(goal_trig)) / TRIG_MAX_RATIO;
+    int dot_y = center.y - (dot_r * cos_lookup(goal_trig)) / TRIG_MAX_RATIO;
+
+    graphics_context_set_fill_color(ctx,
+      PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+    graphics_fill_circle(ctx, GPoint(dot_x, dot_y), 3);
   }
 }
 
-static void update_display(void) {
-  snprintf(s_count_buf, sizeof(s_count_buf), "%d", s_count);
-  text_layer_set_text(s_count_layer, s_count_buf);
-  layer_mark_dirty(s_bar_layer);
+// ──────────────────────────────────────────────
+// Flash effect for goal celebration
+// ──────────────────────────────────────────────
+
+static void flash_timer_callback(void *data) {
+  s_flash_active = false;
+  s_flash_timer = NULL;
+  layer_mark_dirty(s_canvas_layer);
 }
 
-static void bar_update(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  int bar_h = 4;
-  int y = bounds.size.h - bar_h;
+static void celebrate_goal(void) {
+  // Vibration pattern
+  static const uint32_t segs[] = {80, 50, 80, 50, 150};
+  VibePattern pat = { .durations = segs, .num_segments = 5 };
+  vibes_enqueue_custom_pattern(pat);
 
-  // Background
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
-  graphics_fill_rect(ctx, GRect(0, y, bounds.size.w, bar_h), 0, GCornerNone);
+  // Flash effect
+  s_flash_active = true;
+  layer_mark_dirty(s_canvas_layer);
+  if (s_flash_timer) {
+    app_timer_cancel(s_flash_timer);
+  }
+  s_flash_timer = app_timer_register(600, flash_timer_callback, NULL);
+}
 
-  // Fill based on count mod 100
-  int pct = s_count % 100;
-  int fill_w = (pct * bounds.size.w) / 100;
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
-  graphics_fill_rect(ctx, GRect(0, y, fill_w, bar_h), 0, GCornerNone);
+// ──────────────────────────────────────────────
+// Display
+// ──────────────────────────────────────────────
+
+static void update_display(void) {
+  // Count text
+  snprintf(s_count_buf, sizeof(s_count_buf), "%d", s_count);
+  text_layer_set_text(s_count_layer, s_count_buf);
+
+  // Circle multiplier label
+  int circles = s_count / 100;
+  if (circles > 0) {
+    snprintf(s_circle_buf, sizeof(s_circle_buf), "x%d", circles);
+  } else {
+    s_circle_buf[0] = '\0';
+  }
+  text_layer_set_text(s_circle_label_layer, s_circle_buf);
+
+  // Goal text
+  if (GOAL_OPTIONS[s_goal_index] > 0) {
+    snprintf(s_goal_buf, sizeof(s_goal_buf), "Goal: %d", GOAL_OPTIONS[s_goal_index]);
+  } else {
+    snprintf(s_goal_buf, sizeof(s_goal_buf), "No Goal");
+  }
+  text_layer_set_text(s_goal_layer, s_goal_buf);
+
+  // Yesterday's count
+  if (s_history[1] > 0) {
+    snprintf(s_yesterday_buf, sizeof(s_yesterday_buf), "Yesterday: %d", s_history[1]);
+  } else {
+    snprintf(s_yesterday_buf, sizeof(s_yesterday_buf), " ");
+  }
+  text_layer_set_text(s_yesterday_layer, s_yesterday_buf);
+
+  // Redraw canvas
+  layer_mark_dirty(s_canvas_layer);
+}
+
+// ──────────────────────────────────────────────
+// Overlay (first launch)
+// ──────────────────────────────────────────────
+
+static void dismiss_overlay(void) {
+  if (s_show_overlay && s_overlay_layer) {
+    s_show_overlay = false;
+    layer_set_hidden(text_layer_get_layer(s_overlay_layer), true);
+  }
+}
+
+// ──────────────────────────────────────────────
+// Button handlers
+// ──────────────────────────────────────────────
+
+static void check_goal(void) {
+  int goal = GOAL_OPTIONS[s_goal_index];
+  if (goal > 0 && s_count == goal) {
+    celebrate_goal();
+  }
 }
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
   s_count++;
   update_display();
-  save_count();
+  save_all();
+  check_goal();
 
   // Subtle haptic
   static const uint32_t segs[] = {30};
@@ -57,28 +275,53 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void up_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
+  int old = s_count;
   s_count += 5;
   update_display();
-  save_count();
-  vibes_short_pulse();
+  save_all();
+
+  // Check if we crossed the goal
+  int goal = GOAL_OPTIONS[s_goal_index];
+  if (goal > 0 && old < goal && s_count >= goal) {
+    celebrate_goal();
+  } else {
+    vibes_short_pulse();
+  }
 }
 
 static void down_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
   if (s_count > 0) {
     s_count--;
     update_display();
-    save_count();
+    save_all();
   }
 }
 
 static void select_long_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
   s_count = 0;
   update_display();
-  save_count();
+  save_all();
 
   // Double vibrate for reset
   static const uint32_t segs[] = {100, 80, 100};
   VibePattern pat = { .durations = segs, .num_segments = 3 };
+  vibes_enqueue_custom_pattern(pat);
+}
+
+static void up_long_click(ClickRecognizerRef recognizer, void *context) {
+  if (s_show_overlay) { dismiss_overlay(); return; }
+
+  // Cycle through goal options
+  s_goal_index = (s_goal_index + 1) % NUM_GOAL_OPTIONS;
+  update_display();
+  save_all();
+
+  // Confirm vibration
+  static const uint32_t segs[] = {40};
+  VibePattern pat = { .durations = segs, .num_segments = 1 };
   vibes_enqueue_custom_pattern(pat);
 }
 
@@ -87,7 +330,26 @@ static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_UP, up_click);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
   window_long_click_subscribe(BUTTON_ID_SELECT, 1000, select_long_click, NULL);
+  window_long_click_subscribe(BUTTON_ID_UP, 700, up_long_click, NULL);
 }
+
+// ──────────────────────────────────────────────
+// Bluetooth
+// ──────────────────────────────────────────────
+
+static void bt_handler(bool connected) {
+  s_bt_connected = connected;
+  if (!connected) {
+    // Vibrate to alert disconnect
+    static const uint32_t segs[] = {200, 100, 200, 100, 200};
+    VibePattern pat = { .durations = segs, .num_segments = 5 };
+    vibes_enqueue_custom_pattern(pat);
+  }
+}
+
+// ──────────────────────────────────────────────
+// Window load / unload
+// ──────────────────────────────────────────────
 
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
@@ -95,47 +357,128 @@ static void window_load(Window *window) {
 
   window_set_background_color(window, GColorBlack);
 
-  // Label
-  s_label_layer = text_layer_create(GRect(0, 15, bounds.size.w, 24));
-  text_layer_set_background_color(s_label_layer, GColorClear);
-  text_layer_set_text_color(s_label_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
-  text_layer_set_font(s_label_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-  text_layer_set_text_alignment(s_label_layer, GTextAlignmentCenter);
-  text_layer_set_text(s_label_layer, "TALLY");
-  layer_add_child(root, text_layer_get_layer(s_label_layer));
+  // ── Status bar with dotted separator ──
+  s_status_bar = status_bar_layer_create();
+  status_bar_layer_set_colors(s_status_bar, GColorBlack,
+    PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  status_bar_layer_set_separator_mode(s_status_bar,
+    StatusBarLayerSeparatorModeDotted);
+  layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
 
-  // Big count
-  s_count_layer = text_layer_create(GRect(0, 40, bounds.size.w, 70));
+  // Content area shifted down by STATUS_BAR_LAYER_HEIGHT (16px)
+  int yoff = STATUS_BAR_LAYER_HEIGHT;
+
+  // ── Canvas for circular arc ──
+  s_canvas_layer = layer_create(GRect(0, yoff, bounds.size.w,
+                                      bounds.size.h - yoff));
+  layer_set_update_proc(s_canvas_layer, canvas_update);
+  layer_add_child(root, s_canvas_layer);
+
+  // ── Big count (centered in arc) ──
+  // Arc center is at roughly (w/2, (h-yoff)/2 + 4) within canvas
+  int canvas_h = bounds.size.h - yoff;
+  int count_y = (canvas_h / 2) + 4 - 28;  // ~28 is half of BITHAM_42 height
+  s_count_layer = text_layer_create(GRect(0, count_y,
+                                          bounds.size.w, 50));
   text_layer_set_background_color(s_count_layer, GColorClear);
   text_layer_set_text_color(s_count_layer, GColorWhite);
-  text_layer_set_font(s_count_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  text_layer_set_font(s_count_layer,
+    fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_count_layer, GTextAlignmentCenter);
-  layer_add_child(root, text_layer_get_layer(s_count_layer));
+  layer_add_child(s_canvas_layer, text_layer_get_layer(s_count_layer));
 
-  // Hints
-  s_hint_layer = text_layer_create(GRect(0, 120, bounds.size.w, 40));
+  // ── Circle multiplier label (below count) ──
+  s_circle_label_layer = text_layer_create(GRect(0, count_y + 46,
+                                                  bounds.size.w, 20));
+  text_layer_set_background_color(s_circle_label_layer, GColorClear);
+  text_layer_set_text_color(s_circle_label_layer,
+    PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  text_layer_set_font(s_circle_label_layer,
+    fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_circle_label_layer, GTextAlignmentCenter);
+  layer_add_child(s_canvas_layer, text_layer_get_layer(s_circle_label_layer));
+
+  // ── Goal label (top area, inside canvas) ──
+  s_goal_layer = text_layer_create(GRect(0, 2, bounds.size.w, 18));
+  text_layer_set_background_color(s_goal_layer, GColorClear);
+  text_layer_set_text_color(s_goal_layer,
+    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_font(s_goal_layer,
+    fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_goal_layer, GTextAlignmentCenter);
+  layer_add_child(s_canvas_layer, text_layer_get_layer(s_goal_layer));
+
+  // ── Yesterday label (bottom area) ──
+  s_yesterday_layer = text_layer_create(GRect(0, canvas_h - 34,
+                                               bounds.size.w, 18));
+  text_layer_set_background_color(s_yesterday_layer, GColorClear);
+  text_layer_set_text_color(s_yesterday_layer,
+    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_font(s_yesterday_layer,
+    fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_yesterday_layer, GTextAlignmentCenter);
+  layer_add_child(s_canvas_layer, text_layer_get_layer(s_yesterday_layer));
+
+  // ── Hints (bottom) ──
+  s_hint_layer = text_layer_create(GRect(0, canvas_h - 20,
+                                          bounds.size.w, 20));
   text_layer_set_background_color(s_hint_layer, GColorClear);
-  text_layer_set_text_color(s_hint_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
-  text_layer_set_font(s_hint_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_color(s_hint_layer,
+    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_font(s_hint_layer,
+    fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_hint_layer, GTextAlignmentCenter);
-  text_layer_set_text(s_hint_layer, "Sel:+1  Up:+5  Down:-1\nHold Sel: Reset");
-  layer_add_child(root, text_layer_get_layer(s_hint_layer));
+  text_layer_set_text(s_hint_layer, "Sel:+1  Up:+5  Dn:-1");
+  layer_add_child(s_canvas_layer, text_layer_get_layer(s_hint_layer));
 
-  // Progress bar
-  s_bar_layer = layer_create(bounds);
-  layer_set_update_proc(s_bar_layer, bar_update);
-  layer_add_child(root, s_bar_layer);
+  // ── First-launch overlay ──
+  s_overlay_layer = text_layer_create(GRect(8, 20,
+                                            bounds.size.w - 16, canvas_h - 30));
+  text_layer_set_background_color(s_overlay_layer,
+    PBL_IF_COLOR_ELSE(GColorOxfordBlue, GColorBlack));
+  text_layer_set_text_color(s_overlay_layer, GColorWhite);
+  text_layer_set_font(s_overlay_layer,
+    fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_text_alignment(s_overlay_layer, GTextAlignmentCenter);
+  text_layer_set_text(s_overlay_layer,
+    "\nTally Counter\n\n"
+    "Sel: +1\n"
+    "Up: +5\n"
+    "Down: -1\n"
+    "Hold Sel: Reset\n"
+    "Hold Up: Set Goal\n\n"
+    "Press any button...");
+  text_layer_set_overflow_mode(s_overlay_layer, GTextOverflowModeWordWrap);
+  layer_add_child(s_canvas_layer, text_layer_get_layer(s_overlay_layer));
 
-  load_count();
+  // Load data first so s_first_launch is set before overlay check
+  load_data();
+
+  if (s_first_launch) {
+    s_show_overlay = true;
+    layer_set_hidden(text_layer_get_layer(s_overlay_layer), false);
+  } else {
+    s_show_overlay = false;
+    layer_set_hidden(text_layer_get_layer(s_overlay_layer), true);
+  }
+
   update_display();
 }
 
 static void window_unload(Window *window) {
   text_layer_destroy(s_count_layer);
-  text_layer_destroy(s_label_layer);
+  text_layer_destroy(s_circle_label_layer);
+  text_layer_destroy(s_goal_layer);
+  text_layer_destroy(s_yesterday_layer);
   text_layer_destroy(s_hint_layer);
-  layer_destroy(s_bar_layer);
+  text_layer_destroy(s_overlay_layer);
+  layer_destroy(s_canvas_layer);
+  status_bar_layer_destroy(s_status_bar);
 }
+
+// ──────────────────────────────────────────────
+// Init / deinit
+// ──────────────────────────────────────────────
 
 static void init(void) {
   s_window = window_create();
@@ -144,11 +487,23 @@ static void init(void) {
     .load = window_load,
     .unload = window_unload,
   });
+
+  // BT monitoring
+  s_bt_connected = connection_service_peek_pebble_app_connection();
+  connection_service_subscribe((ConnectionHandlers) {
+    .pebble_app_connection_handler = bt_handler,
+  });
+
   window_stack_push(s_window, true);
 }
 
 static void deinit(void) {
-  save_count();
+  save_all();
+  connection_service_unsubscribe();
+  if (s_flash_timer) {
+    app_timer_cancel(s_flash_timer);
+    s_flash_timer = NULL;
+  }
   window_destroy(s_window);
 }
 
