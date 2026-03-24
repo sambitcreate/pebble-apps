@@ -19,7 +19,7 @@ static int s_digits[COLS];
 
 static void update_time(void) {
   time_t now = time(NULL);
-  struct tm *t = localtime(&now);
+  const struct tm *t = localtime(&now);
 
   s_digits[0] = t->tm_hour / 10;
   s_digits[1] = t->tm_hour % 10;
@@ -43,7 +43,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   int y_off = (bounds.size.h - total_h) / 2 + DOT_RADIUS;
 
   // Bit weights top to bottom: 8, 4, 2, 1
-  int weights[ROWS] = {8, 4, 2, 1};
+  const int weights[ROWS] = {8, 4, 2, 1};
 
   for (int col = 0; col < COLS; col++) {
     int x = x_off + col * COL_SPACING;
