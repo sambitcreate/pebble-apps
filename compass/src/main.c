@@ -1,16 +1,45 @@
 #include <pebble.h>
 
+// ─── UI layers ───────────────────────────────────────────────────────────────
 static Window *s_window;
+static StatusBarLayer *s_status_bar;
 static Layer *s_canvas;
 static TextLayer *s_heading_layer;
 static TextLayer *s_cardinal_layer;
 static TextLayer *s_status_layer;
 static TextLayer *s_cal_instruction_layer;
+static TextLayer *s_lock_layer;
 
-static int s_heading = 0;
+// First-launch overlay
+static Layer *s_overlay_layer;
+static TextLayer *s_overlay_text;
+static bool s_overlay_visible = true;
+
+// ─── Compass state ───────────────────────────────────────────────────────────
+static int s_display_heading = 0;   // smoothed heading shown on screen
+static int s_target_heading = 0;    // raw magnetometer reading
+static int s_velocity = 0;          // angular velocity
 static bool s_heading_valid = false;
 static CompassStatus s_cal_status = CompassStatusUnavailable;
-static char s_heading_buf[8];
+static char s_heading_buf[16];
+
+// Physics constants
+#define FRICTION 85      // 0-100, higher = more damping
+#define SPRING   12      // spring constant
+
+// ─── Heading lock ────────────────────────────────────────────────────────────
+#define LOCK_THRESHOLD 2     // degrees
+#define LOCK_COUNT_NEEDED 3  // consecutive readings within threshold
+static int s_lock_counter = 0;
+static int s_last_heading = -1;
+static bool s_heading_locked = false;
+
+// ─── Animation timer ─────────────────────────────────────────────────────────
+static AppTimer *s_anim_timer = NULL;
+#define ANIM_INTERVAL_MS 33  // ~30 fps
+
+// ─── Bluetooth state ─────────────────────────────────────────────────────────
+static bool s_bt_connected = true;
 
 static const char *cardinal_direction(int heading) {
   if (heading >= 337 || heading < 23)  return "N";
@@ -23,7 +52,7 @@ static const char *cardinal_direction(int heading) {
   return "NW";
 }
 
-// Needle triangle path
+// Needle triangle path (north, red)
 static GPoint s_needle_points[] = {
   {0, -50},
   {-8, 10},
@@ -35,7 +64,7 @@ static GPathInfo s_needle_info = {
 };
 static GPath *s_needle_path;
 
-// South half of needle
+// South half of needle (gray)
 static GPoint s_south_points[] = {
   {0, 50},
   {-6, -5},
@@ -47,6 +76,31 @@ static GPathInfo s_south_info = {
 };
 static GPath *s_south_path;
 
+// ─── Physics smoothing ──────────────────────────────────────────────────────
+static void update_physics(void) {
+  int delta = s_target_heading - s_display_heading;
+  // Normalize to -180..180
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+  s_velocity = (s_velocity * FRICTION / 100) + (delta * SPRING / 100);
+  s_display_heading = ((s_display_heading + s_velocity) % 360 + 360) % 360;
+}
+
+// ─── Animation timer callback ────────────────────────────────────────────────
+static void anim_timer_callback(void *data) {
+  if (s_heading_valid) {
+    update_physics();
+
+    snprintf(s_heading_buf, sizeof(s_heading_buf), "%d\u00B0", s_display_heading);
+    text_layer_set_text(s_heading_layer, s_heading_buf);
+    text_layer_set_text(s_cardinal_layer, cardinal_direction(s_display_heading));
+
+    layer_mark_dirty(s_canvas);
+  }
+  s_anim_timer = app_timer_register(ANIM_INTERVAL_MS, anim_timer_callback, NULL);
+}
+
+// ─── Canvas drawing ──────────────────────────────────────────────────────────
 static void canvas_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   int cx = bounds.size.w / 2;
@@ -54,12 +108,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   GPoint center = GPoint(cx, cy);
 
   // Compass circle
-  GColor ring_color;
-  if (!s_heading_valid) {
-    ring_color = PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray);
-  } else {
-    ring_color = PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray);
-  }
+  GColor ring_color = PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray);
   graphics_context_set_stroke_color(ctx, ring_color);
   graphics_context_set_stroke_width(ctx, 2);
   graphics_draw_circle(ctx, center, 55);
@@ -83,19 +132,26 @@ static void canvas_update(Layer *layer, GContext *ctx) {
       graphics_draw_line(ctx, p1, p2);
     }
 
-    // Question mark in center
+    // "Calibrating..." text in center (larger, bolder)
     graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
     graphics_draw_text(ctx, "?",
                        fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
-                       GRect(cx - 20, cy - 28, 40, 50),
+                       GRect(cx - 20, cy - 30, 40, 50),
+                       GTextOverflowModeTrailingEllipsis,
+                       GTextAlignmentCenter, NULL);
+
+    // Show calibration label below the question mark
+    graphics_draw_text(ctx, "Calibrating",
+                       fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                       GRect(0, cy + 18, bounds.size.w, 28),
                        GTextOverflowModeTrailingEllipsis,
                        GTextAlignmentCenter, NULL);
     return;
   }
 
-  // Tick marks every 30 degrees (rotate with heading)
+  // Tick marks every 30 degrees (rotate with smoothed heading)
   for (int deg = 0; deg < 360; deg += 30) {
-    int32_t angle = DEG_TO_TRIGANGLE(deg - s_heading);
+    int32_t angle = DEG_TO_TRIGANGLE(deg - s_display_heading);
     int inner = 48;
     int outer = 54;
     GPoint p1 = {
@@ -111,11 +167,11 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     graphics_draw_line(ctx, p1, p2);
   }
 
-  // Cardinal labels on the dial (rotate with heading)
+  // Cardinal labels on the dial (rotate with smoothed heading)
   const char *labels[] = {"N", "E", "S", "W"};
   const int label_degs[] = {0, 90, 180, 270};
   for (int i = 0; i < 4; i++) {
-    int32_t angle = DEG_TO_TRIGANGLE(label_degs[i] - s_heading);
+    int32_t angle = DEG_TO_TRIGANGLE(label_degs[i] - s_display_heading);
     int r = 40;
     int lx = cx + (sin_lookup(angle) * r / TRIG_MAX_RATIO) - 5;
     int ly = cy - (cos_lookup(angle) * r / TRIG_MAX_RATIO) - 8;
@@ -146,35 +202,62 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   graphics_fill_circle(ctx, center, 4);
 }
 
+// ─── Compass handler ─────────────────────────────────────────────────────────
 static void compass_handler(CompassHeadingData heading_data) {
   s_cal_status = heading_data.compass_status;
 
-  // Only use heading data when calibrated or calibrating (with usable data)
   if (s_cal_status == CompassStatusCalibrated ||
       s_cal_status == CompassStatusCalibrating) {
-    // Prefer true_heading (accounts for magnetic declination) when valid.
-    // true_heading is set to magnetic_heading when true north is unavailable,
-    // so we can always use it safely. Fall back to magnetic if it's somehow 0
-    // and magnetic is not.
     int32_t heading_angle = heading_data.true_heading;
     if (heading_angle == 0 && heading_data.magnetic_heading != 0) {
       heading_angle = heading_data.magnetic_heading;
     }
-    s_heading = TRIGANGLE_TO_DEG((int)heading_angle);
-    // Clamp to 0-359
-    s_heading = ((s_heading % 360) + 360) % 360;
+    int raw_heading = TRIGANGLE_TO_DEG((int)heading_angle);
+    raw_heading = ((raw_heading % 360) + 360) % 360;
+    s_target_heading = raw_heading;
     s_heading_valid = true;
 
-    snprintf(s_heading_buf, sizeof(s_heading_buf), "%d\u00B0", s_heading);
+    // Heading lock detection
+    if (s_last_heading >= 0) {
+      int diff = raw_heading - s_last_heading;
+      if (diff < 0) diff = -diff;
+      if (diff > 180) diff = 360 - diff;
+      if (diff <= LOCK_THRESHOLD) {
+        s_lock_counter++;
+        if (s_lock_counter >= LOCK_COUNT_NEEDED) {
+          s_heading_locked = true;
+        }
+      } else {
+        s_lock_counter = 0;
+        s_heading_locked = false;
+      }
+    }
+    s_last_heading = raw_heading;
+
+    // Show/hide lock indicator
+    if (s_heading_locked) {
+      text_layer_set_text(s_lock_layer, "LOCKED");
+    } else {
+      text_layer_set_text(s_lock_layer, "");
+    }
+
+    // Physics update happens in the animation timer; just mark dirty
+    update_physics();
+
+    snprintf(s_heading_buf, sizeof(s_heading_buf), "%d\u00B0", s_display_heading);
     text_layer_set_text(s_heading_layer, s_heading_buf);
-    text_layer_set_text(s_cardinal_layer, cardinal_direction(s_heading));
+    text_layer_set_text(s_cardinal_layer, cardinal_direction(s_display_heading));
   } else {
     s_heading_valid = false;
+    s_heading_locked = false;
+    s_lock_counter = 0;
+    s_last_heading = -1;
     text_layer_set_text(s_heading_layer, "--");
     text_layer_set_text(s_cardinal_layer, "");
+    text_layer_set_text(s_lock_layer, "");
   }
 
-  // Update calibration status text
+  // Calibration status text
   switch (s_cal_status) {
     case CompassStatusDataInvalid:
       text_layer_set_text(s_status_layer, "No data");
@@ -200,62 +283,173 @@ static void compass_handler(CompassHeadingData heading_data) {
   layer_mark_dirty(s_canvas);
 }
 
+// ─── Overlay drawing ─────────────────────────────────────────────────────────
+static void overlay_update(Layer *layer, GContext *ctx) {
+  GRect bounds = layer_get_bounds(layer);
+  // Semi-transparent background (solid black on B&W)
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
+
+  // Overlay border
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_rect(ctx, GRect(4, 4, bounds.size.w - 8, bounds.size.h - 8));
+}
+
+// ─── Overlay dismiss on any button ──────────────────────────────────────────
+static void dismiss_overlay(ClickRecognizerRef recognizer, void *context) {
+  if (s_overlay_visible) {
+    s_overlay_visible = false;
+    layer_set_hidden(s_overlay_layer, true);
+    layer_set_hidden(text_layer_get_layer(s_overlay_text), true);
+  }
+}
+
+static void overlay_click_config(void *context) {
+  window_single_click_subscribe(BUTTON_ID_UP, dismiss_overlay);
+  window_single_click_subscribe(BUTTON_ID_SELECT, dismiss_overlay);
+  window_single_click_subscribe(BUTTON_ID_DOWN, dismiss_overlay);
+}
+
+// ─── Bluetooth connection handler ────────────────────────────────────────────
+static void bt_handler(bool connected) {
+  if (!connected && s_bt_connected) {
+    // Just disconnected — vibrate to alert
+    vibes_double_pulse();
+  }
+  s_bt_connected = connected;
+}
+
+// ─── Window lifecycle ────────────────────────────────────────────────────────
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
+  int sb_h = STATUS_BAR_LAYER_HEIGHT;  // 16px
 
   window_set_background_color(window, GColorBlack);
 
-  s_canvas = layer_create(GRect(0, 0, bounds.size.w, bounds.size.w));
+  // Status bar at top with dotted separator
+  s_status_bar = status_bar_layer_create();
+  status_bar_layer_set_colors(s_status_bar, GColorBlack, GColorWhite);
+  status_bar_layer_set_separator_mode(s_status_bar,
+                                       StatusBarLayerSeparatorModeDotted);
+  layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
+
+  // Canvas shifted down by status bar height
+  s_canvas = layer_create(GRect(0, sb_h, bounds.size.w, bounds.size.w));
   layer_set_update_proc(s_canvas, canvas_update);
   layer_add_child(root, s_canvas);
 
-  // Heading degrees
-  s_heading_layer = text_layer_create(GRect(0, bounds.size.w - 5, bounds.size.w, 30));
+  // Heading degrees (shifted down by sb_h)
+  s_heading_layer = text_layer_create(
+      GRect(0, sb_h + bounds.size.w - 5, bounds.size.w, 30));
   text_layer_set_background_color(s_heading_layer, GColorClear);
   text_layer_set_text_color(s_heading_layer, GColorWhite);
-  text_layer_set_font(s_heading_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_font(s_heading_layer,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_text_alignment(s_heading_layer, GTextAlignmentCenter);
   text_layer_set_text(s_heading_layer, "--");
   layer_add_child(root, text_layer_get_layer(s_heading_layer));
 
-  // Cardinal label
-  s_cardinal_layer = text_layer_create(GRect(0, bounds.size.w + 22, bounds.size.w / 2, 24));
+  // Cardinal label (shifted down by sb_h)
+  s_cardinal_layer = text_layer_create(
+      GRect(0, sb_h + bounds.size.w + 22, bounds.size.w / 2, 24));
   text_layer_set_background_color(s_cardinal_layer, GColorClear);
-  text_layer_set_text_color(s_cardinal_layer, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
-  text_layer_set_font(s_cardinal_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_text_color(s_cardinal_layer,
+                            PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+  text_layer_set_font(s_cardinal_layer,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_cardinal_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_cardinal_layer));
 
-  // Calibration status
-  s_status_layer = text_layer_create(GRect(bounds.size.w / 2, bounds.size.w + 22, bounds.size.w / 2, 24));
+  // Calibration status (shifted down by sb_h)
+  s_status_layer = text_layer_create(
+      GRect(bounds.size.w / 2, sb_h + bounds.size.w + 22,
+            bounds.size.w / 2, 24));
   text_layer_set_background_color(s_status_layer, GColorClear);
-  text_layer_set_text_color(s_status_layer, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
-  text_layer_set_font(s_status_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_color(s_status_layer,
+                            PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+  text_layer_set_font(s_status_layer,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_status_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_status_layer));
 
-  // Calibration instruction text (shown over compass when calibrating)
-  s_cal_instruction_layer = text_layer_create(GRect(10, bounds.size.h - 40, bounds.size.w - 20, 40));
+  // Calibration instruction text
+  s_cal_instruction_layer = text_layer_create(
+      GRect(10, bounds.size.h - 40, bounds.size.w - 20, 40));
   text_layer_set_background_color(s_cal_instruction_layer, GColorClear);
-  text_layer_set_text_color(s_cal_instruction_layer, PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorWhite));
-  text_layer_set_font(s_cal_instruction_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_color(s_cal_instruction_layer,
+                            PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorWhite));
+  text_layer_set_font(s_cal_instruction_layer,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_cal_instruction_layer, GTextAlignmentCenter);
   text_layer_set_text(s_cal_instruction_layer, "Starting compass...");
   layer_add_child(root, text_layer_get_layer(s_cal_instruction_layer));
 
+  // Heading lock indicator (below cardinal, shifted by sb_h)
+  s_lock_layer = text_layer_create(
+      GRect(0, sb_h + bounds.size.w + 42, bounds.size.w, 20));
+  text_layer_set_background_color(s_lock_layer, GColorClear);
+  text_layer_set_text_color(s_lock_layer,
+                            PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  text_layer_set_font(s_lock_layer,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD));
+  text_layer_set_text_alignment(s_lock_layer, GTextAlignmentCenter);
+  text_layer_set_text(s_lock_layer, "");
+  layer_add_child(root, text_layer_get_layer(s_lock_layer));
+
+  // First-launch instruction overlay
+  s_overlay_layer = layer_create(GRect(10, sb_h + 20,
+                                       bounds.size.w - 20,
+                                       bounds.size.h - sb_h - 40));
+  layer_set_update_proc(s_overlay_layer, overlay_update);
+  layer_add_child(root, s_overlay_layer);
+
+  GRect overlay_bounds = layer_get_bounds(s_overlay_layer);
+  s_overlay_text = text_layer_create(
+      GRect(18, sb_h + 30, bounds.size.w - 56,
+            bounds.size.h - sb_h - 60));
+  text_layer_set_background_color(s_overlay_text, GColorClear);
+  text_layer_set_text_color(s_overlay_text, GColorWhite);
+  text_layer_set_font(s_overlay_text,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_text_alignment(s_overlay_text, GTextAlignmentCenter);
+  text_layer_set_text(s_overlay_text,
+                      "Compass\n\n"
+                      "Updates automatically.\n"
+                      "Point wrist forward\nfor heading.\n\n"
+                      "Press any button\nto dismiss.");
+  layer_add_child(root, text_layer_get_layer(s_overlay_text));
+  (void)overlay_bounds;
+
+  // Set click config for overlay dismiss
+  window_set_click_config_provider(window, overlay_click_config);
+
+  // Create paths
   s_needle_path = gpath_create(&s_needle_info);
   s_south_path = gpath_create(&s_south_info);
+
+  // Start animation timer
+  s_anim_timer = app_timer_register(ANIM_INTERVAL_MS,
+                                    anim_timer_callback, NULL);
 }
 
 static void window_unload(Window *window) {
+  if (s_anim_timer) {
+    app_timer_cancel(s_anim_timer);
+    s_anim_timer = NULL;
+  }
   gpath_destroy(s_needle_path);
   gpath_destroy(s_south_path);
   text_layer_destroy(s_heading_layer);
   text_layer_destroy(s_cardinal_layer);
   text_layer_destroy(s_status_layer);
   text_layer_destroy(s_cal_instruction_layer);
+  text_layer_destroy(s_lock_layer);
+  text_layer_destroy(s_overlay_text);
+  layer_destroy(s_overlay_layer);
   layer_destroy(s_canvas);
+  status_bar_layer_destroy(s_status_bar);
 }
 
 static void init(void) {
@@ -266,12 +460,19 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
 
-  // Use a small heading filter for smooth updates during calibration
+  // Compass service
   compass_service_set_heading_filter(DEG_TO_TRIGANGLE(1));
   compass_service_subscribe(compass_handler);
+
+  // Bluetooth connection service
+  s_bt_connected = connection_service_peek_pebble_app_connection();
+  connection_service_subscribe((ConnectionHandlers) {
+    .pebble_app_connection_handler = bt_handler,
+  });
 }
 
 static void deinit(void) {
+  connection_service_unsubscribe();
   compass_service_unsubscribe();
   window_destroy(s_window);
 }
