@@ -127,6 +127,48 @@ Upload your `.pbw` to [dev-portal.rebble.io](https://dev-portal.rebble.io) with 
 
 ---
 
+## Updating an App After Code Changes
+
+After editing `src/main.c` or any source file, follow these steps to get the updated app onto your watch:
+
+```bash
+# 1. Rebuild
+cd binary-clock
+pebble build
+
+# 2. Pick ONE of these to deploy:
+
+# Option A: Direct install via WiFi
+pebble install --phone 192.168.1.XXX
+
+# Option B: Copy to iCloud Drive, then open .pbw on phone
+cp build/binary-clock.pbw ~/Library/Mobile\ Documents/com~apple~CloudDocs/Pebble\ Apps/
+
+# Option C: AirDrop the .pbw to your phone
+open build/   # opens Finder, then AirDrop the .pbw file
+```
+
+**Bulk rebuild all apps:**
+```bash
+cd /path/to/pebble
+for app in */; do
+  [ -f "$app/src/main.c" ] || continue
+  echo "Building $app..."
+  (cd "$app" && pebble build)
+done
+```
+
+**Bulk copy all .pbw files to iCloud:**
+```bash
+for app in */build/*.pbw; do
+  cp "$app" ~/Library/Mobile\ Documents/com~apple~CloudDocs/Pebble\ Apps/
+done
+```
+
+The `.pbw` file in `build/` is the compiled app. Every time you change code, you need to `pebble build` again to regenerate it. The old version on your watch gets replaced when you install the new `.pbw`.
+
+---
+
 ## Browser-Based Alternatives (No Local Setup)
 
 If you don't want to install the SDK locally:
