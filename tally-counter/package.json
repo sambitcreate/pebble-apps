@@ -1,0 +1,22 @@
+{
+  "name": "tally-counter",
+  "author": "Sambit Biswas",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Tally Counter",
+    "uuid": "a1b2c3d4-aaaa-4000-8000-00000000000a",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["diorite", "basalt", "emery"],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": {},
+    "resources": {
+      "media": []
+    }
+  }
+}
