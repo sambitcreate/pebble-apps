@@ -77,7 +77,7 @@ static void vibrate_time(bool minutes_only) {
   int h = s_24h ? t->tm_hour : (t->tm_hour % 12 == 0 ? 12 : t->tm_hour % 12);
   int m = t->tm_min;
 
-  int digits[4] = {h / 10, h % 10, m / 10, m % 10};
+  const int digits[4] = {h / 10, h % 10, m / 10, m % 10};
   int start = minutes_only ? 2 : 0;
 
   for (int d = start; d < 4; d++) {
