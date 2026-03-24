@@ -1,0 +1,22 @@
+{
+  "name": "binary-clock",
+  "author": "Sambit Biswas",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Binary Clock",
+    "uuid": "a1b2c3d4-1111-4000-8000-000000000001",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["diorite", "basalt", "emery"],
+    "watchapp": {
+      "watchface": true
+    },
+    "messageKeys": {},
+    "resources": {
+      "media": []
+    }
+  }
+}
