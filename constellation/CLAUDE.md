@@ -23,23 +23,27 @@ Single-file C watchface (`src/main.c`) with no external resources.
 | Element              | Description                                                                 |
 |----------------------|-----------------------------------------------------------------------------|
 | Background stars     | 35 dots with 3 brightness levels (1px dim, 2px normal, 3px bright); ~33% cycle each second |
-| Hour markers         | 12 dots on a 60 px radius circle; current hour is larger and red (color)    |
-| Constellation lines  | 3 line segments connecting hour-marker dots; pattern changes each hour      |
-| Constellation name   | Name of current hour's zodiac constellation shown alongside time text       |
+| Hour markers         | 12 tiny dots (radius 1) as reference points on the 60px circle              |
+| Hour hand dot        | Largest dot (radius 4, red on color) at smooth hour angle (hour*30+min/2)   |
+| Minute hand dot      | Medium dot (radius 3, cyan on color) at minute angle (min*6)                |
+| Second hand dot      | Small dot (radius 1, yellow on color) at second angle (sec*6)               |
+| Constellation lines  | Triangle connecting H↔M, M↔S, H↔S in cyan; shifts dynamically with time    |
 | Shooting star        | Animated arc with 5-point fading trail; triggers at second 30 each minute (~2s duration) |
 | Pole star            | Fixed star at top center; size/color reflects battery percentage            |
-| Digital time         | GOTHIC_14 text at the bottom: "HH:MM  ConstellationName"                   |
+| Digital time         | GOTHIC_14 text at the bottom: "HH:MM"                                      |
 
 ### Color mapping
 
-| Element           | Color (Basalt/Emery)                      | B&W (Diorite) |
-|-------------------|-------------------------------------------|---------------|
-| Stars             | White                                     | White          |
-| Constellation     | Cyan                                      | White          |
-| Shooting star     | ChromeYellow -> Yellow -> White (trail)    | White          |
-| Current hour dot  | Red                                       | White          |
-| Pole star         | Yellow (>60%), ChromeYellow (>20%), Red    | White          |
-| Time text         | Light Gray                                | White          |
+| Element             | Color (Basalt/Emery)                      | B&W (Diorite) |
+|---------------------|-------------------------------------------|---------------|
+| Stars               | White                                     | White          |
+| Hour hand dot       | Red                                       | White          |
+| Minute hand dot     | Cyan                                      | White          |
+| Second hand dot     | Yellow                                    | White          |
+| Constellation lines | Cyan                                      | White          |
+| Shooting star       | ChromeYellow -> Yellow -> White (trail)    | White          |
+| Pole star           | Yellow (>60%), ChromeYellow (>20%), Red    | White          |
+| Time text           | Light Gray                                | White          |
 
 ### Platforms
 

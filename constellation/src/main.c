@@ -51,40 +51,6 @@ static uint32_t prng_next(void) {
   return (s_seed >> 16) & 0x7FFF;
 }
 
-// ── Constellation names ───────────────────────────────────────────────────
-static const char *s_constellation_names[12] = {
-  "Aries",       // h0  (12 o'clock)
-  "Taurus",      // h1
-  "Gemini",      // h2
-  "Cancer",      // h3
-  "Leo",         // h4
-  "Virgo",       // h5
-  "Libra",       // h6
-  "Scorpio",     // h7
-  "Sagittarius", // h8
-  "Capricorn",   // h9
-  "Aquarius",    // h10
-  "Pisces",      // h11
-};
-
-// ── Constellation patterns ─────────────────────────────────────────────────
-// Each hour has lines connecting hour-marker indices.
-// Format: pairs of indices. -1 sentinel terminates.
-static const int8_t s_constellation_lines[][9] = {
-  /* h0  (12 o'clock) */ { 11, 0,  0, 1,  0, 3,  -1 },
-  /* h1  */              {  0, 1,  1, 2,  1, 4,  -1 },
-  /* h2  */              {  1, 2,  2, 3,  2, 5,  -1 },
-  /* h3  */              {  2, 3,  3, 4,  3, 6,  -1 },
-  /* h4  */              {  3, 4,  4, 5,  4, 7,  -1 },
-  /* h5  */              {  4, 5,  5, 6,  5, 8,  -1 },
-  /* h6  */              {  5, 6,  6, 7,  6, 9,  -1 },
-  /* h7  */              {  6, 7,  7, 8,  7,10,  -1 },
-  /* h8  */              {  7, 8,  8, 9,  8,11,  -1 },
-  /* h9  */              {  8, 9,  9,10,  9, 0,  -1 },
-  /* h10 */              {  9,10, 10,11, 10, 1,  -1 },
-  /* h11 */              { 10,11, 11, 0, 11, 2,  -1 },
-};
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 // Compute a point on a circle. angle is 0-359 degrees (0 = 12 o'clock).
@@ -177,6 +143,18 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   (void)bounds;
 
   int hour12 = s_current_time.tm_hour % 12;
+  int minute = s_current_time.tm_min;
+  int second = s_current_time.tm_sec;
+
+  // Hand angles (0° = 12 o'clock, clockwise)
+  int hour_angle   = hour12 * 30 + minute / 2;  // smooth sweep
+  int minute_angle = minute * 6;
+  int second_angle = second * 6;
+
+  // Hand positions on the same circle as hour markers
+  GPoint hour_pos   = point_on_circle(CENTER_X, CENTER_Y, HOUR_MARKER_RADIUS, hour_angle);
+  GPoint minute_pos = point_on_circle(CENTER_X, CENTER_Y, HOUR_MARKER_RADIUS, minute_angle);
+  GPoint second_pos = point_on_circle(CENTER_X, CENTER_Y, HOUR_MARKER_RADIUS, second_angle);
 
   // -- Black background --
   graphics_context_set_fill_color(ctx, GColorBlack);
@@ -215,36 +193,47 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     graphics_fill_circle(ctx, GPoint(POLE_STAR_X, POLE_STAR_Y), pole_radius);
   }
 
-  // -- Constellation lines for current hour --
+  // -- Hour markers (subtle reference dots) --
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  for (int i = 0; i < NUM_HOUR_MARKERS; i++) {
+    graphics_fill_circle(ctx, s_hour_pos[i], 1);
+  }
+
+  // -- Constellation triangle connecting H, M, S --
 #ifdef PBL_COLOR
   graphics_context_set_stroke_color(ctx, GColorCyan);
 #else
   graphics_context_set_stroke_color(ctx, GColorWhite);
 #endif
   graphics_context_set_stroke_width(ctx, 1);
-  const int8_t *lines = s_constellation_lines[hour12];
-  for (int j = 0; lines[j] != -1; j += 2) {
-    int a = lines[j];
-    int b = lines[j + 1];
-    graphics_draw_line(ctx, s_hour_pos[a], s_hour_pos[b]);
-  }
+  graphics_draw_line(ctx, hour_pos, minute_pos);
+  graphics_draw_line(ctx, minute_pos, second_pos);
+  graphics_draw_line(ctx, hour_pos, second_pos);
 
-  // -- Hour markers --
-  for (int i = 0; i < NUM_HOUR_MARKERS; i++) {
-    if (i == hour12) {
-      // Current hour: largest, red on color
+  // -- Hand dots (drawn on top of lines) --
+  // Second hand: smallest
 #ifdef PBL_COLOR
-      graphics_context_set_fill_color(ctx, GColorRed);
+  graphics_context_set_fill_color(ctx, GColorYellow);
 #else
-      graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, GColorWhite);
 #endif
-      graphics_fill_circle(ctx, s_hour_pos[i], 4);
-    } else {
-      // Other hours: small dot
-      graphics_context_set_fill_color(ctx, GColorWhite);
-      graphics_fill_circle(ctx, s_hour_pos[i], 2);
-    }
-  }
+  graphics_fill_circle(ctx, second_pos, 1);
+
+  // Minute hand: medium
+#ifdef PBL_COLOR
+  graphics_context_set_fill_color(ctx, GColorCyan);
+#else
+  graphics_context_set_fill_color(ctx, GColorWhite);
+#endif
+  graphics_fill_circle(ctx, minute_pos, 3);
+
+  // Hour hand: largest
+#ifdef PBL_COLOR
+  graphics_context_set_fill_color(ctx, GColorRed);
+#else
+  graphics_context_set_fill_color(ctx, GColorWhite);
+#endif
+  graphics_fill_circle(ctx, hour_pos, 4);
 
   // -- Animated shooting star with trail --
   if (s_shooting_active && s_shooting_trail_count > 0) {
@@ -299,13 +288,8 @@ static void update_time(void) {
   struct tm *t = localtime(&now);
   s_current_time = *t;
 
-  int hour12 = t->tm_hour % 12;
-
-  // Format: "HH:MM  ConstellationName"
-  static char buf[32];
-  char time_str[6];
-  strftime(time_str, sizeof(time_str), clock_is_24h_style() ? "%H:%M" : "%I:%M", t);
-  snprintf(buf, sizeof(buf), "%s  %s", time_str, s_constellation_names[hour12]);
+  static char buf[8];
+  strftime(buf, sizeof(buf), clock_is_24h_style() ? "%H:%M" : "%I:%M", t);
   text_layer_set_text(s_time_layer, buf);
 }
 
@@ -342,7 +326,7 @@ static void window_load(Window *window) {
   layer_set_update_proc(s_canvas_layer, canvas_update_proc);
   layer_add_child(root, s_canvas_layer);
 
-  // Time + constellation name text at the bottom
+  // Digital time text at the bottom
   s_time_layer = text_layer_create(GRect(0, bounds.size.h - 20, bounds.size.w, 20));
   text_layer_set_background_color(s_time_layer, GColorClear);
 #ifdef PBL_COLOR

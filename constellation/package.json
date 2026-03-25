@@ -6,7 +6,7 @@
   "displayName": "Constellation",
   "name": "constellation",
   "uuid": "a1b2c3d4-e006-4000-8000-000000000e06",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A dreamy star-field watchface where constellations tell the time",
   "enableMultiJS": false,
   "targetPlatforms": [
