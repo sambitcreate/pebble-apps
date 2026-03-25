@@ -40,7 +40,7 @@ static char s_history_buf[40];
 
 // ---- Spin animation ----
 static int s_spin_count = 0;
-#define SPIN_FRAMES 10
+#define SPIN_FRAMES 12
 static AppTimer *s_spin_timer = NULL;
 static int s_actual_result = 0;
 static bool s_spinning = false;
@@ -303,7 +303,7 @@ static void spin_frame(void *data) {
   text_layer_set_text(s_result_layer, s_result_buf);
 
   if (s_spin_count < SPIN_FRAMES) {
-    int delay = 30 + (s_spin_count * 8); // 30ms -> 102ms, decelerating
+    int delay = 40 + (s_spin_count * s_spin_count * 3); // quadratic ramp-down: 40ms -> 403ms (~2s total)
     s_spin_timer = app_timer_register(delay, spin_frame, NULL);
   } else {
     s_spin_timer = NULL;
