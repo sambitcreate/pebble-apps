@@ -48,6 +48,10 @@ static const SpeedPreset SPEED_PRESETS[] = {
 #define KEY_SPEED        1
 #define KEY_FIRST_LAUNCH 2
 
+// ── AppMessage keys (must match messageKeys in package.json) ──
+#define MSG_KEY_TIME_FORMAT 0
+#define MSG_KEY_SPEED       1
+
 // ── UI layers ──
 static Window *s_window;
 static StatusBarLayer *s_status_bar;
@@ -332,42 +336,39 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
   text_layer_set_text(s_hint_layer, "Vibrating time...");
 }
 
-static void up_click(ClickRecognizerRef recognizer, void *context) {
-  if (s_show_overlay) { dismiss_overlay(); return; }
-  s_24h = !s_24h;
-  persist_write_bool(KEY_24H, s_24h);
-  update_display();
-  text_layer_set_text(s_hint_layer, s_24h ? "24h mode" : "12h mode");
-}
-
 static void down_click(ClickRecognizerRef recognizer, void *context) {
   if (s_show_overlay) { dismiss_overlay(); return; }
   start_playback(true);
   text_layer_set_text(s_hint_layer, "Vibrating minutes...");
 }
 
-static void up_long_click(ClickRecognizerRef recognizer, void *context) {
-  if (s_show_overlay) { dismiss_overlay(); return; }
-  s_speed_index = (s_speed_index + 1) % NUM_SPEEDS;
-  persist_write_int(KEY_SPEED, s_speed_index);
-  update_display();
-
-  // Show speed change in hint
-  snprintf(s_speed_buf, sizeof(s_speed_buf), "Speed: %s",
-           SPEED_PRESETS[s_speed_index].label);
-  text_layer_set_text(s_hint_layer, s_speed_buf);
-
-  // Confirm vibration
-  static const uint32_t segs[] = {40};
-  VibePattern pat = { .durations = segs, .num_segments = 1 };
-  vibes_enqueue_custom_pattern(pat);
-}
-
 static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
-  window_single_click_subscribe(BUTTON_ID_UP, up_click);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
-  window_long_click_subscribe(BUTTON_ID_UP, 700, up_long_click, NULL);
+}
+
+// ── AppMessage handlers ──
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *fmt_t = dict_find(iter, MSG_KEY_TIME_FORMAT);
+  if (fmt_t) {
+    s_24h = (fmt_t->value->int32 != 0);
+    persist_write_bool(KEY_24H, s_24h);
+  }
+
+  Tuple *spd_t = dict_find(iter, MSG_KEY_SPEED);
+  if (spd_t) {
+    int idx = (int)spd_t->value->int32;
+    if (idx >= 0 && idx < NUM_SPEEDS) {
+      s_speed_index = idx;
+      persist_write_int(KEY_SPEED, s_speed_index);
+    }
+  }
+
+  update_display();
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
 }
 
 // ── Tick handler ──
@@ -444,7 +445,7 @@ static void window_load(Window *window) {
   text_layer_set_font(s_hint_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_hint_layer, GTextAlignmentCenter);
-  text_layer_set_text(s_hint_layer, "Sel: play  Hold Up: speed");
+  text_layer_set_text(s_hint_layer, "Sel: play  Down: minutes");
   layer_add_child(root, text_layer_get_layer(s_hint_layer));
 
   // 4. First-launch overlay
@@ -462,11 +463,10 @@ static void window_load(Window *window) {
       fonts_get_system_font(FONT_KEY_GOTHIC_18));
     text_layer_set_text_alignment(s_overlay_text, GTextAlignmentCenter);
     text_layer_set_text(s_overlay_text,
-      "Morse Time v1.1\n\n"
+      "Morse Time v1.2\n\n"
       "SEL: Vibrate time\n"
-      "UP: 12h/24h toggle\n"
       "DOWN: Minutes only\n"
-      "Hold UP: Speed\n\n"
+      "Settings via phone\n\n"
       "Press any button");
     layer_add_child(s_overlay_layer, text_layer_get_layer(s_overlay_text));
   }
@@ -515,6 +515,11 @@ static void init(void) {
   window_stack_push(s_window, true);
 
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+
+  // Set up AppMessage for phone config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 
   // BT disconnect alert
   connection_service_subscribe((ConnectionHandlers) {
