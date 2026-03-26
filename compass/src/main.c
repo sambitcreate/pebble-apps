@@ -24,8 +24,13 @@ static CompassStatus s_cal_status = CompassStatusUnavailable;
 static char s_heading_buf[16];
 
 // Physics constants
-#define FRICTION 85      // 0-100, higher = more damping
-#define SPRING   12      // spring constant
+#define FRICTION_DEFAULT 85  // 0-100, higher = more damping
+#define SPRING   12          // spring constant
+static int s_friction = FRICTION_DEFAULT;
+
+// Persistent storage / AppMessage keys
+#define STORAGE_KEY_FRICTION 1
+#define MSG_KEY_NEEDLE_DAMPING 0
 
 // ─── Heading lock ────────────────────────────────────────────────────────────
 #define LOCK_THRESHOLD 2     // degrees
@@ -82,7 +87,7 @@ static void update_physics(void) {
   // Normalize to -180..180
   while (delta > 180) delta -= 360;
   while (delta < -180) delta += 360;
-  s_velocity = (s_velocity * FRICTION / 100) + (delta * SPRING / 100);
+  s_velocity = (s_velocity * s_friction / 100) + (delta * SPRING / 100);
   s_display_heading = ((s_display_heading + s_velocity) % 360 + 360) % 360;
 }
 
@@ -311,6 +316,22 @@ static void overlay_click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_DOWN, dismiss_overlay);
 }
 
+// ─── AppMessage handlers ─────────────────────────────────────────────────────
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *damping_t = dict_find(iter, MSG_KEY_NEEDLE_DAMPING);
+  if (damping_t) {
+    int val = (int)damping_t->value->int32;
+    if (val >= 0 && val <= 100) {
+      s_friction = val;
+      persist_write_int(STORAGE_KEY_FRICTION, s_friction);
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // ─── Bluetooth connection handler ────────────────────────────────────────────
 static void bt_handler(bool connected) {
   if (!connected && s_bt_connected) {
@@ -453,6 +474,11 @@ static void window_unload(Window *window) {
 }
 
 static void init(void) {
+  // Load persisted friction setting
+  if (persist_exists(STORAGE_KEY_FRICTION)) {
+    s_friction = persist_read_int(STORAGE_KEY_FRICTION);
+  }
+
   s_window = window_create();
   window_set_window_handlers(s_window, (WindowHandlers) {
     .load = window_load,
@@ -469,6 +495,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_handler,
   });
+
+  // AppMessage for phone configuration
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 }
 
 static void deinit(void) {
