@@ -1,16 +1,22 @@
 #include <pebble.h>
 
 #define TICK_MS 100
-#define MAX_LAPS 20
+#define MAX_LAPS_LIMIT 99  // absolute maximum array size
+
+// AppMessage keys (must match messageKeys in package.json)
+#define MSG_KEY_MAX_LAPS       0
+#define MSG_KEY_SHOW_LAP_DELTAS 1
 
 // Persist keys
 #define KEY_ELAPSED    0
 #define KEY_RUNNING    1
 #define KEY_LAP_COUNT  2
-#define KEY_LAPS       3  // 3..22 for laps[0..19]
-#define KEY_LAP_START  23
-#define KEY_LAP_DELTA  24
-#define KEY_FIRST_LAUNCH 25
+#define KEY_LAPS       3  // 3..101 for laps[0..98]
+#define KEY_LAP_START  102
+#define KEY_LAP_DELTA  103
+#define KEY_FIRST_LAUNCH 104
+#define KEY_CFG_MAX_LAPS 105
+#define KEY_CFG_SHOW_DELTAS 106
 
 static Window *s_window;
 static StatusBarLayer *s_status_bar;
@@ -28,10 +34,14 @@ static bool s_show_overlay = false;
 
 static int s_elapsed_tenths = 0;
 static bool s_running = false;
-static int s_laps[MAX_LAPS];       // individual lap durations (tenths)
+static int s_laps[MAX_LAPS_LIMIT]; // individual lap durations (tenths)
 static int s_lap_count = 0;
 static int s_last_lap_start = 0;   // elapsed tenths at start of current lap
 static int s_lap_delta = 0;        // delta vs previous lap (tenths)
+
+// Configurable settings
+static int s_max_laps = 20;        // configurable max laps (default 20)
+static bool s_show_lap_deltas = true; // show +/- delta vs previous lap
 static char s_time_buf[16];
 static char s_lap_bufs[3][32];
 static char s_delta_buf[16];
@@ -78,8 +88,8 @@ static void update_display(void) {
     }
   }
 
-  // Show lap delta
-  if (s_lap_count > 1 && s_lap_delta != 0) {
+  // Show lap delta (if enabled)
+  if (s_show_lap_deltas && s_lap_count > 1 && s_lap_delta != 0) {
     format_delta(s_lap_delta, s_delta_buf, sizeof(s_delta_buf));
     text_layer_set_text(s_delta_layer, s_delta_buf);
     text_layer_set_text_color(s_delta_layer,
@@ -164,7 +174,7 @@ static void up_click(ClickRecognizerRef recognizer, void *context) {
     dismiss_overlay();
     return;
   }
-  if (s_running && s_lap_count < MAX_LAPS) {
+  if (s_running && s_lap_count < s_max_laps) {
     record_lap();
     update_display();
     vibes_short_pulse();
@@ -326,9 +336,11 @@ static void save_state(void) {
   persist_write_int(KEY_LAP_COUNT, s_lap_count);
   persist_write_int(KEY_LAP_START, s_last_lap_start);
   persist_write_int(KEY_LAP_DELTA, s_lap_delta);
-  for (int i = 0; i < s_lap_count && i < MAX_LAPS; i++) {
+  for (int i = 0; i < s_lap_count && i < MAX_LAPS_LIMIT; i++) {
     persist_write_int(KEY_LAPS + i, s_laps[i]);
   }
+  persist_write_int(KEY_CFG_MAX_LAPS, s_max_laps);
+  persist_write_bool(KEY_CFG_SHOW_DELTAS, s_show_lap_deltas);
 }
 
 static void load_state(void) {
@@ -338,10 +350,39 @@ static void load_state(void) {
     s_lap_count = persist_read_int(KEY_LAP_COUNT);
     s_last_lap_start = persist_read_int(KEY_LAP_START);
     s_lap_delta = persist_read_int(KEY_LAP_DELTA);
-    for (int i = 0; i < s_lap_count && i < MAX_LAPS; i++) {
+    for (int i = 0; i < s_lap_count && i < MAX_LAPS_LIMIT; i++) {
       s_laps[i] = persist_read_int(KEY_LAPS + i);
     }
   }
+  if (persist_exists(KEY_CFG_MAX_LAPS)) {
+    s_max_laps = persist_read_int(KEY_CFG_MAX_LAPS);
+  }
+  if (persist_exists(KEY_CFG_SHOW_DELTAS)) {
+    s_show_lap_deltas = persist_read_bool(KEY_CFG_SHOW_DELTAS);
+  }
+}
+
+// AppMessage: receive config from phone
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *max_laps_t = dict_find(iter, MSG_KEY_MAX_LAPS);
+  if (max_laps_t) {
+    int val = max_laps_t->value->int32;
+    if (val >= 1 && val <= MAX_LAPS_LIMIT) {
+      s_max_laps = val;
+      persist_write_int(KEY_CFG_MAX_LAPS, s_max_laps);
+    }
+  }
+
+  Tuple *show_deltas_t = dict_find(iter, MSG_KEY_SHOW_LAP_DELTAS);
+  if (show_deltas_t) {
+    s_show_lap_deltas = (show_deltas_t->value->int32 != 0);
+    persist_write_bool(KEY_CFG_SHOW_DELTAS, s_show_lap_deltas);
+    update_display();
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
 }
 
 static void init(void) {
@@ -371,6 +412,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_handler,
   });
+
+  // Set up AppMessage for config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 64);
 }
 
 static void deinit(void) {
