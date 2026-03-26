@@ -8,6 +8,18 @@
 #define GRID_H    42
 
 // ---------------------------------------------------------------------------
+// AppMessage keys (must match messageKeys in package.json)
+// ---------------------------------------------------------------------------
+#define MSG_KEY_SPEED_PRESET 0
+#define MSG_KEY_SEED_PATTERN 1
+
+// ---------------------------------------------------------------------------
+// Persist storage keys
+// ---------------------------------------------------------------------------
+#define STORAGE_KEY_SPEED 1
+#define STORAGE_KEY_PATTERN 2
+
+// ---------------------------------------------------------------------------
 // Speed settings (ms per frame)
 // ---------------------------------------------------------------------------
 #define SPEED_SLOW   200
@@ -444,6 +456,42 @@ static void bt_handler(bool connected) {
   layer_mark_dirty(s_canvas);
 }
 
+// ===== AppMessage handlers (phone config) ==================================
+
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *speed_t = dict_find(iter, MSG_KEY_SPEED_PRESET);
+  if (speed_t) {
+    int val = speed_t->value->int32;
+    if (val >= 0 && val < SPEED_COUNT) {
+      s_speed_idx = val;
+      persist_write_int(STORAGE_KEY_SPEED, s_speed_idx);
+
+      // Show speed indicator briefly
+      s_show_speed = true;
+      if (s_speed_timer) {
+        app_timer_cancel(s_speed_timer);
+      }
+      s_speed_timer = app_timer_register(1000, speed_timer_callback, NULL);
+      layer_mark_dirty(s_canvas);
+    }
+  }
+
+  Tuple *pattern_t = dict_find(iter, MSG_KEY_SEED_PATTERN);
+  if (pattern_t) {
+    int val = pattern_t->value->int32;
+    if (val >= 0 && val < PATTERN_COUNT) {
+      s_pattern_idx = val;
+      persist_write_int(STORAGE_KEY_PATTERN, s_pattern_idx);
+      seed_pattern_by_index(s_pattern_idx);
+      layer_mark_dirty(s_canvas);
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // ===== Window handlers =====================================================
 
 static void window_load(Window *window) {
@@ -479,6 +527,17 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+
+  // Restore persisted settings
+  if (persist_exists(STORAGE_KEY_SPEED)) {
+    s_speed_idx = persist_read_int(STORAGE_KEY_SPEED);
+    if (s_speed_idx < 0 || s_speed_idx >= SPEED_COUNT) s_speed_idx = 1;
+  }
+  if (persist_exists(STORAGE_KEY_PATTERN)) {
+    s_pattern_idx = persist_read_int(STORAGE_KEY_PATTERN);
+    if (s_pattern_idx < 0 || s_pattern_idx >= PATTERN_COUNT) s_pattern_idx = 0;
+  }
+
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -492,6 +551,11 @@ static void init(void) {
     .pebble_app_connection_handler = bt_handler,
   });
   s_bt_connected = connection_service_peek_pebble_app_connection();
+
+  // Set up AppMessage for phone config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 64);
 
   s_timer = app_timer_register(s_speed_values[s_speed_idx], game_loop, NULL);
 }
