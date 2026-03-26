@@ -6,6 +6,9 @@
 #define MAX_SNAKE (GRID_W * GRID_H)
 
 #define STORAGE_KEY_HIGH 1
+#define STORAGE_KEY_SPEED 2
+
+#define MSG_KEY_BASE_SPEED 0
 
 #define DEATH_ANIM_INTERVAL 40  // ms per segment removal
 #define BONUS_LIFETIME 50       // ticks before bonus food disappears
@@ -47,6 +50,9 @@ static bool s_bt_connected;
 // First-launch overlay
 static bool s_first_launch;
 
+// Configurable base speed (ms per tick)
+static int s_base_speed = 200;
+
 // --- Snake body gradient coloring ---
 static GColor snake_segment_color(int index, int total) {
 #ifdef PBL_COLOR
@@ -67,7 +73,7 @@ static GColor snake_segment_color(int index, int total) {
 
 // --- Difficulty scaling ---
 static int get_tick_interval(void) {
-    int base = 200;
+    int base = s_base_speed;
     int reduction = (s_score / 5) * 10;
     int interval = base - reduction;
     if (interval < 80) interval = 80;
@@ -465,6 +471,24 @@ static void bt_handler(bool connected) {
     layer_mark_dirty(s_canvas);
 }
 
+// --- AppMessage: receive config from phone ---
+static void inbox_received(DictionaryIterator *iter, void *context) {
+    (void)context;
+    Tuple *speed_t = dict_find(iter, MSG_KEY_BASE_SPEED);
+    if (speed_t) {
+        int val = speed_t->value->int32;
+        if (val >= 100 && val <= 500) {
+            s_base_speed = val;
+            persist_write_int(STORAGE_KEY_SPEED, s_base_speed);
+        }
+    }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+    (void)context;
+    APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // --- Window handlers ---
 static void window_load(Window *window) {
     Layer *root = window_get_root_layer(window);
@@ -497,6 +521,12 @@ static void window_unload(Window *window) {
 // --- Init / Deinit ---
 static void init(void) {
     srand(time(NULL));
+
+    // Load persisted base speed
+    if (persist_exists(STORAGE_KEY_SPEED)) {
+        s_base_speed = persist_read_int(STORAGE_KEY_SPEED);
+    }
+
     s_window = window_create();
     window_set_click_config_provider(s_window, click_config);
     window_set_window_handlers(s_window, (WindowHandlers) {
@@ -505,6 +535,11 @@ static void init(void) {
     });
     window_stack_push(s_window, true);
     s_timer = app_timer_register(get_tick_interval(), game_loop, NULL);
+
+    // Set up AppMessage for config
+    app_message_register_inbox_received(inbox_received);
+    app_message_register_inbox_dropped(inbox_dropped);
+    app_message_open(64, 64);
 }
 
 static void deinit(void) {
