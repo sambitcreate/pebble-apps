@@ -1,12 +1,20 @@
 #include <pebble.h>
 
 // ── Storage keys ──
-#define STORAGE_KEY_COUNT   1
-#define STORAGE_KEY_GOAL    2
-#define STORAGE_KEY_HISTORY 3   // 7 ints (today + 6 previous days)
-#define STORAGE_KEY_DAY     4   // day-of-year when last saved
+#define STORAGE_KEY_COUNT       1
+#define STORAGE_KEY_GOAL        2
+#define STORAGE_KEY_HISTORY     3   // 7 ints (today + 6 previous days)
+#define STORAGE_KEY_DAY         4   // day-of-year when last saved
+#define STORAGE_KEY_CUSTOM_GOAL 5
+#define STORAGE_KEY_STEP_SEL    6
+#define STORAGE_KEY_STEP_UP     7
 
-// ── Goal presets ──
+// ── AppMessage keys (must match messageKeys in package.json) ──
+#define MSG_KEY_GOAL        0
+#define MSG_KEY_STEP_SELECT 1
+#define MSG_KEY_STEP_UP     2
+
+// ── Goal presets (on-watch fallback) ──
 static const int GOAL_OPTIONS[] = {0, 10, 25, 50, 100, 250, 500, 1000};
 #define NUM_GOAL_OPTIONS 8
 
@@ -27,6 +35,9 @@ static TextLayer *s_overlay_layer;        // first-launch overlay
 // ── State ──
 static int s_count = 0;
 static int s_goal_index = 0;              // index into GOAL_OPTIONS
+static int s_custom_goal = 0;             // custom goal from phone (0 = use presets)
+static int s_step_select = 1;             // select button increment
+static int s_step_up = 5;                 // up button increment
 static int s_history[HISTORY_DAYS];       // [0]=today, [1]=yesterday, ...
 static int s_last_day = -1;              // day-of-year last saved
 static bool s_first_launch = false;
@@ -37,6 +48,7 @@ static char s_count_buf[12];
 static char s_circle_buf[12];
 static char s_goal_buf[20];
 static char s_yesterday_buf[24];
+static char s_hint_buf[32];
 
 // ── BT state ──
 static bool s_bt_connected = true;
@@ -47,6 +59,12 @@ static AppTimer *s_flash_timer = NULL;
 // ── Forward declarations ──
 static void update_display(void);
 static void save_all(void);
+
+// ── Goal helper: custom goal takes priority over presets ──
+static int get_goal(void) {
+  if (s_custom_goal > 0) return s_custom_goal;
+  return GOAL_OPTIONS[s_goal_index];
+}
 
 // ──────────────────────────────────────────────
 // Persistence
@@ -73,6 +91,21 @@ static void load_data(void) {
     if (s_goal_index < 0 || s_goal_index >= NUM_GOAL_OPTIONS) {
       s_goal_index = 0;
     }
+  }
+
+  // Custom goal from phone config
+  if (persist_exists(STORAGE_KEY_CUSTOM_GOAL)) {
+    s_custom_goal = persist_read_int(STORAGE_KEY_CUSTOM_GOAL);
+  }
+
+  // Step increments from phone config
+  if (persist_exists(STORAGE_KEY_STEP_SEL)) {
+    s_step_select = persist_read_int(STORAGE_KEY_STEP_SEL);
+    if (s_step_select < 1) s_step_select = 1;
+  }
+  if (persist_exists(STORAGE_KEY_STEP_UP)) {
+    s_step_up = persist_read_int(STORAGE_KEY_STEP_UP);
+    if (s_step_up < 1) s_step_up = 1;
   }
 
   // History
@@ -115,6 +148,9 @@ static void load_data(void) {
 static void save_all(void) {
   persist_write_int(STORAGE_KEY_COUNT, s_count);
   persist_write_int(STORAGE_KEY_GOAL, s_goal_index);
+  persist_write_int(STORAGE_KEY_CUSTOM_GOAL, s_custom_goal);
+  persist_write_int(STORAGE_KEY_STEP_SEL, s_step_select);
+  persist_write_int(STORAGE_KEY_STEP_UP, s_step_up);
 
   // Update today's history slot
   s_history[0] = s_count;
@@ -159,8 +195,8 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // ── Goal marker (small tick on the ring) ──
-  if (GOAL_OPTIONS[s_goal_index] > 0) {
-    int goal_val = GOAL_OPTIONS[s_goal_index];
+  if (get_goal() > 0) {
+    int goal_val = get_goal();
     int goal_angle_deg = (goal_val % 100) * 360 / 100;
     if (goal_angle_deg == 0 && goal_val > 0) goal_angle_deg = 360;
     int32_t goal_trig = DEG_TO_TRIGANGLE(goal_angle_deg);
@@ -220,8 +256,8 @@ static void update_display(void) {
   text_layer_set_text(s_circle_label_layer, s_circle_buf);
 
   // Goal text
-  if (GOAL_OPTIONS[s_goal_index] > 0) {
-    snprintf(s_goal_buf, sizeof(s_goal_buf), "Goal: %d", GOAL_OPTIONS[s_goal_index]);
+  if (get_goal() > 0) {
+    snprintf(s_goal_buf, sizeof(s_goal_buf), "Goal: %d", get_goal());
   } else {
     snprintf(s_goal_buf, sizeof(s_goal_buf), "No Goal");
   }
@@ -234,6 +270,11 @@ static void update_display(void) {
     snprintf(s_yesterday_buf, sizeof(s_yesterday_buf), " ");
   }
   text_layer_set_text(s_yesterday_layer, s_yesterday_buf);
+
+  // Hint text with current step values
+  snprintf(s_hint_buf, sizeof(s_hint_buf), "Sel:+%d  Up:+%d  Dn:-1",
+           s_step_select, s_step_up);
+  text_layer_set_text(s_hint_layer, s_hint_buf);
 
   // Redraw canvas
   layer_mark_dirty(s_canvas_layer);
@@ -255,7 +296,7 @@ static void dismiss_overlay(void) {
 // ──────────────────────────────────────────────
 
 static void check_goal(void) {
-  int goal = GOAL_OPTIONS[s_goal_index];
+  int goal = get_goal();
   if (goal > 0 && s_count == goal) {
     celebrate_goal();
   }
@@ -263,7 +304,7 @@ static void check_goal(void) {
 
 static void select_click(ClickRecognizerRef recognizer, void *context) {
   if (s_show_overlay) { dismiss_overlay(); return; }
-  s_count++;
+  s_count += s_step_select;
   update_display();
   save_all();
   check_goal();
@@ -277,12 +318,12 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
 static void up_click(ClickRecognizerRef recognizer, void *context) {
   if (s_show_overlay) { dismiss_overlay(); return; }
   int old = s_count;
-  s_count += 5;
+  s_count += s_step_up;
   update_display();
   save_all();
 
   // Check if we crossed the goal
-  int goal = GOAL_OPTIONS[s_goal_index];
+  int goal = get_goal();
   if (goal > 0 && old < goal && s_count >= goal) {
     celebrate_goal();
   } else {
@@ -428,7 +469,7 @@ static void window_load(Window *window) {
   text_layer_set_font(s_hint_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_hint_layer, GTextAlignmentCenter);
-  text_layer_set_text(s_hint_layer, "Sel:+1  Up:+5  Dn:-1");
+  // Hint text set dynamically in update_display()
   layer_add_child(s_canvas_layer, text_layer_get_layer(s_hint_layer));
 
   // ── First-launch overlay ──
@@ -477,6 +518,40 @@ static void window_unload(Window *window) {
 }
 
 // ──────────────────────────────────────────────
+// AppMessage: receive config from phone
+// ──────────────────────────────────────────────
+
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *goal_t = dict_find(iter, MSG_KEY_GOAL);
+  if (goal_t) {
+    s_custom_goal = (int)goal_t->value->int32;
+    if (s_custom_goal < 0) s_custom_goal = 0;
+    persist_write_int(STORAGE_KEY_CUSTOM_GOAL, s_custom_goal);
+  }
+
+  Tuple *step_sel_t = dict_find(iter, MSG_KEY_STEP_SELECT);
+  if (step_sel_t) {
+    s_step_select = (int)step_sel_t->value->int32;
+    if (s_step_select < 1) s_step_select = 1;
+    persist_write_int(STORAGE_KEY_STEP_SEL, s_step_select);
+  }
+
+  Tuple *step_up_t = dict_find(iter, MSG_KEY_STEP_UP);
+  if (step_up_t) {
+    s_step_up = (int)step_up_t->value->int32;
+    if (s_step_up < 1) s_step_up = 1;
+    persist_write_int(STORAGE_KEY_STEP_UP, s_step_up);
+  }
+
+  update_display();
+  save_all();
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
+// ──────────────────────────────────────────────
 // Init / deinit
 // ──────────────────────────────────────────────
 
@@ -493,6 +568,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_handler,
   });
+
+  // Set up AppMessage for phone config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 64);
 
   window_stack_push(s_window, true);
 }
