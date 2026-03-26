@@ -44,6 +44,12 @@ static int       s_shooting_trail_count = 0;
 // Battery level for pole star
 static int s_battery_pct = 100;
 
+// Seconds display mode
+#define PERSIST_KEY_SEC_MODE 1
+enum SecMode { SEC_EVERY_1S = 0, SEC_EVERY_15S = 1, SEC_OFF = 2 };
+static enum SecMode s_sec_mode = SEC_EVERY_1S;
+static AppTimer *s_shooting_delay_timer = NULL; // for SEC_OFF mode
+
 // Simple LCG PRNG so star positions are deterministic
 static uint32_t s_seed = 12345;
 static uint32_t prng_next(void) {
@@ -137,6 +143,32 @@ static void shooting_star_timer_callback(void *data) {
   }
 }
 
+// ── Seconds mode helpers ─────────────────────────────────────────────────
+static void tick_handler(struct tm *tick_time, TimeUnits units_changed);
+
+static void apply_tick_subscription(void) {
+  tick_timer_service_unsubscribe();
+  if (s_sec_mode == SEC_OFF) {
+    tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+  } else {
+    tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+  }
+}
+
+static void shooting_delay_callback(void *data) {
+  (void)data;
+  s_shooting_delay_timer = NULL;
+  start_shooting_star();
+}
+
+static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
+  (void)axis; (void)direction;
+  s_sec_mode = (s_sec_mode + 1) % 3;
+  persist_write_int(PERSIST_KEY_SEC_MODE, s_sec_mode);
+  apply_tick_subscription();
+  if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+}
+
 // ── Drawing ────────────────────────────────────────────────────────────────
 static void canvas_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
@@ -199,7 +231,9 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     graphics_fill_circle(ctx, s_hour_pos[i], 1);
   }
 
-  // -- Constellation triangle connecting H, M, S --
+  // -- Constellation lines + hand dots --
+  bool show_sec = (s_sec_mode != SEC_OFF);
+
 #ifdef PBL_COLOR
   graphics_context_set_stroke_color(ctx, GColorCyan);
 #else
@@ -207,17 +241,20 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 #endif
   graphics_context_set_stroke_width(ctx, 1);
   graphics_draw_line(ctx, hour_pos, minute_pos);
-  graphics_draw_line(ctx, minute_pos, second_pos);
-  graphics_draw_line(ctx, hour_pos, second_pos);
+  if (show_sec) {
+    graphics_draw_line(ctx, minute_pos, second_pos);
+    graphics_draw_line(ctx, hour_pos, second_pos);
+  }
 
-  // -- Hand dots (drawn on top of lines) --
-  // Second hand: smallest
+  // Second hand: smallest (only when enabled)
+  if (show_sec) {
 #ifdef PBL_COLOR
-  graphics_context_set_fill_color(ctx, GColorYellow);
+    graphics_context_set_fill_color(ctx, GColorYellow);
 #else
-  graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_context_set_fill_color(ctx, GColorWhite);
 #endif
-  graphics_fill_circle(ctx, second_pos, 1);
+    graphics_fill_circle(ctx, second_pos, 1);
+  }
 
   // Minute hand: medium
 #ifdef PBL_COLOR
@@ -296,20 +333,29 @@ static void update_time(void) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   s_current_time = *tick_time;
 
-  // Multi-level twinkle: cycle brightness levels pseudo-randomly each second
+  // Multi-level twinkle
   s_seed = tick_time->tm_sec * 7919 + tick_time->tm_min * 131;
   for (int i = 0; i < NUM_BACKGROUND_STARS; i++) {
     uint32_t r = prng_next();
     if ((r % 3) == 0) {
-      // Cycle brightness: pick new random level
       uint32_t r2 = prng_next();
-      s_bg_star_brightness[i] = (int)(r2 % 3); // 0=dim, 1=normal, 2=bright
+      s_bg_star_brightness[i] = (int)(r2 % 3);
     }
   }
 
-  // Trigger shooting star at second 30
-  if (tick_time->tm_sec == 30) {
-    start_shooting_star();
+  if (s_sec_mode == SEC_OFF) {
+    // MINUTE_UNIT: schedule shooting star at 30s via timer
+    if (s_shooting_delay_timer) {
+      app_timer_cancel(s_shooting_delay_timer);
+    }
+    s_shooting_delay_timer = app_timer_register(30000, shooting_delay_callback, NULL);
+  } else if (s_sec_mode == SEC_EVERY_15S) {
+    // Only redraw at 0/15/30/45
+    if (tick_time->tm_sec == 30) start_shooting_star();
+    if (tick_time->tm_sec % 15 != 0 && !s_shooting_active) return;
+  } else {
+    // SEC_EVERY_1S: full update every second
+    if (tick_time->tm_sec == 30) start_shooting_star();
   }
 
   update_time();
@@ -357,6 +403,12 @@ static void window_unload(Window *window) {
 
 // ── App lifecycle ──────────────────────────────────────────────────────────
 static void init(void) {
+  // Load saved seconds mode
+  if (persist_exists(PERSIST_KEY_SEC_MODE)) {
+    s_sec_mode = persist_read_int(PERSIST_KEY_SEC_MODE);
+    if (s_sec_mode > SEC_OFF) s_sec_mode = SEC_EVERY_1S;
+  }
+
   s_window = window_create();
   window_set_background_color(s_window, GColorBlack);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -365,16 +417,22 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
 
-  tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+  apply_tick_subscription();
   battery_state_service_subscribe(battery_handler);
+  accel_tap_service_subscribe(accel_tap_handler);
 }
 
 static void deinit(void) {
+  accel_tap_service_unsubscribe();
   tick_timer_service_unsubscribe();
   battery_state_service_unsubscribe();
   if (s_shooting_timer) {
     app_timer_cancel(s_shooting_timer);
     s_shooting_timer = NULL;
+  }
+  if (s_shooting_delay_timer) {
+    app_timer_cancel(s_shooting_delay_timer);
+    s_shooting_delay_timer = NULL;
   }
   window_destroy(s_window);
 }
