@@ -46,6 +46,7 @@ static int s_battery_pct = 100;
 
 // Seconds display mode
 #define PERSIST_KEY_SEC_MODE 1
+#define MSG_KEY_SEC_MODE     0  // matches messageKeys.SecMode in package.json
 enum SecMode { SEC_EVERY_1S = 0, SEC_EVERY_15S = 1, SEC_OFF = 2 };
 static enum SecMode s_sec_mode = SEC_EVERY_1S;
 static AppTimer *s_shooting_delay_timer = NULL; // for SEC_OFF mode
@@ -161,12 +162,22 @@ static void shooting_delay_callback(void *data) {
   start_shooting_star();
 }
 
-static void accel_tap_handler(AccelAxisType axis, int32_t direction) {
-  (void)axis; (void)direction;
-  s_sec_mode = (s_sec_mode + 1) % 3;
-  persist_write_int(PERSIST_KEY_SEC_MODE, s_sec_mode);
-  apply_tick_subscription();
-  if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+// ── AppMessage: receive config from phone ────────────────────────────────
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *mode_t = dict_find(iter, MSG_KEY_SEC_MODE);
+  if (mode_t) {
+    int val = mode_t->value->int32;
+    if (val >= SEC_EVERY_1S && val <= SEC_OFF) {
+      s_sec_mode = val;
+      persist_write_int(PERSIST_KEY_SEC_MODE, s_sec_mode);
+      apply_tick_subscription();
+      if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
 }
 
 // ── Drawing ────────────────────────────────────────────────────────────────
@@ -419,11 +430,13 @@ static void init(void) {
 
   apply_tick_subscription();
   battery_state_service_subscribe(battery_handler);
-  accel_tap_service_subscribe(accel_tap_handler);
+
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 }
 
 static void deinit(void) {
-  accel_tap_service_unsubscribe();
   tick_timer_service_unsubscribe();
   battery_state_service_unsubscribe();
   if (s_shooting_timer) {

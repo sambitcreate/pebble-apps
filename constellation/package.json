@@ -8,7 +8,7 @@
   "uuid": "a1b2c3d4-e006-4000-8000-000000000e06",
   "version": "1.2.0",
   "description": "A dreamy star-field watchface where constellations tell the time",
-  "enableMultiJS": false,
+  "enableMultiJS": true,
   "targetPlatforms": [
     "basalt",
     "diorite",
@@ -18,7 +18,9 @@
   "watchapp": {
     "watchface": true
   },
-  "messageKeys": {},
+  "messageKeys": {
+    "SecMode": 0
+  },
   "resources": {
     "media": []
   },
@@ -27,7 +29,7 @@
     "displayName": "Constellation",
     "uuid": "a1b2c3d4-e006-4000-8000-000000000e06",
     "sdkVersion": "3",
-    "enableMultiJS": false,
+    "enableMultiJS": true,
     "targetPlatforms": [
       "basalt",
       "diorite",
@@ -36,7 +38,9 @@
     "watchapp": {
       "watchface": true
     },
-    "messageKeys": {},
+    "messageKeys": {
+      "SecMode": 0
+    },
     "resources": {
       "media": []
     }
