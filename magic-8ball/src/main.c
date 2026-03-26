@@ -1,5 +1,13 @@
 #include <pebble.h>
 
+// AppMessage keys — must match messageKeys in package.json
+#define MSG_KEY_VIBRATION 0
+#define MSG_KEY_ANIM_SPEED 1
+
+// Persist storage keys
+#define STORAGE_KEY_VIBRATION 10
+#define STORAGE_KEY_ANIM_SPEED 11
+
 static Window *s_window;
 static Layer *s_canvas;
 static TextLayer *s_answer_layer;
@@ -10,6 +18,10 @@ static StatusBarLayer *s_status_bar;
 static Layer *s_overlay_layer;
 static TextLayer *s_overlay_text;
 static bool s_first_launch = true;
+
+// Configuration
+static bool s_vibration_enabled = true;   // default: on
+static int s_anim_frame_ms = 40;          // default: Normal (40ms)
 
 // Animation state
 static AppTimer *s_anim_timer;
@@ -98,7 +110,7 @@ static void anim_timer_callback(void *data) {
     text_layer_set_text(s_answer_layer, ANSWERS[s_current]);
   } else {
     // Ease-out: decelerate towards end
-    s_anim_timer = app_timer_register(40, anim_timer_callback, NULL);
+    s_anim_timer = app_timer_register(s_anim_frame_ms, anim_timer_callback, NULL);
   }
   layer_mark_dirty(s_canvas);
 }
@@ -108,7 +120,7 @@ static void start_reveal_animation(void) {
   s_animating = true;
   // Hide text during grow animation
   text_layer_set_text(s_answer_layer, "");
-  s_anim_timer = app_timer_register(40, anim_timer_callback, NULL);
+  s_anim_timer = app_timer_register(s_anim_frame_ms, anim_timer_callback, NULL);
 }
 
 // Ease-out function: fast start, slow end
@@ -136,10 +148,12 @@ static void reveal_answer(void) {
   // Start grow animation
   start_reveal_animation();
 
-  // Vibrate
-  static const uint32_t segments[] = {80, 40, 80};
-  VibePattern pat = { .durations = segments, .num_segments = 3 };
-  vibes_enqueue_custom_pattern(pat);
+  // Vibrate (if enabled)
+  if (s_vibration_enabled) {
+    static const uint32_t segments[] = {80, 40, 80};
+    VibePattern pat = { .durations = segments, .num_segments = 3 };
+    vibes_enqueue_custom_pattern(pat);
+  }
 }
 
 static void reset_ball(void) {
@@ -255,6 +269,28 @@ static void dismiss_overlay(void) {
   }
 }
 
+// AppMessage: receive config from phone
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *vib_t = dict_find(iter, MSG_KEY_VIBRATION);
+  if (vib_t) {
+    s_vibration_enabled = (vib_t->value->int32 != 0);
+    persist_write_bool(STORAGE_KEY_VIBRATION, s_vibration_enabled);
+  }
+
+  Tuple *speed_t = dict_find(iter, MSG_KEY_ANIM_SPEED);
+  if (speed_t) {
+    s_anim_frame_ms = (int)speed_t->value->int32;
+    // Clamp to sane range
+    if (s_anim_frame_ms < 10) s_anim_frame_ms = 10;
+    if (s_anim_frame_ms > 120) s_anim_frame_ms = 120;
+    persist_write_int(STORAGE_KEY_ANIM_SPEED, s_anim_frame_ms);
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // --- BT connection handler ---
 static void bt_handler(bool connected) {
   if (!connected) {
@@ -366,6 +402,15 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+
+  // Load persisted config
+  if (persist_exists(STORAGE_KEY_VIBRATION)) {
+    s_vibration_enabled = persist_read_bool(STORAGE_KEY_VIBRATION);
+  }
+  if (persist_exists(STORAGE_KEY_ANIM_SPEED)) {
+    s_anim_frame_ms = persist_read_int(STORAGE_KEY_ANIM_SPEED);
+  }
+
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -377,6 +422,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_handler,
   });
+
+  // Set up AppMessage for config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 }
 
 static void deinit(void) {

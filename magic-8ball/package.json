@@ -1,7 +1,7 @@
 {
   "name": "magic-8ball",
   "author": "Sambit Biswas",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
@@ -9,12 +9,15 @@
     "displayName": "Magic 8-Ball",
     "uuid": "a1b2c3d4-2222-4000-8000-000000000002",
     "sdkVersion": "3",
-    "enableMultiJS": false,
+    "enableMultiJS": true,
     "targetPlatforms": ["diorite", "basalt", "emery"],
     "watchapp": {
       "watchface": false
     },
-    "messageKeys": {},
+    "messageKeys": {
+      "Vibration": 0,
+      "AnimSpeed": 1
+    },
     "resources": {
       "media": []
     }
