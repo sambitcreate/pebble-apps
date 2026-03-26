@@ -19,10 +19,17 @@ typedef enum {
   PHASE_LONG_BREAK,
 } Phase;
 
-#define WORK_SECONDS     (25 * 60)
-#define SHORT_BREAK_SEC  (5 * 60)
-#define LONG_BREAK_SEC   (15 * 60)
-#define POMOS_BEFORE_LONG 4
+// Configurable durations (defaults; overridden by phone config)
+static int WORK_SECONDS     = 25 * 60;
+static int SHORT_BREAK_SEC  = 5 * 60;
+static int LONG_BREAK_SEC   = 15 * 60;
+static int POMOS_BEFORE_LONG = 4;
+
+// AppMessage keys (must match messageKeys in package.json)
+#define MSG_KEY_WORK_DURATION     0
+#define MSG_KEY_SHORT_BREAK       1
+#define MSG_KEY_LONG_BREAK        2
+#define MSG_KEY_POMOS_BEFORE_LONG 3
 
 // Persistent storage keys
 #define STORAGE_PHASE     1
@@ -31,14 +38,20 @@ typedef enum {
 #define STORAGE_RUNNING   4
 #define STORAGE_FIRST_LAUNCH 100
 
+// Persistent storage keys for config
+#define STORAGE_CFG_WORK      10
+#define STORAGE_CFG_SHORT     11
+#define STORAGE_CFG_LONG      12
+#define STORAGE_CFG_POMOS     13
+
 // Session dot constants
 #define MAX_SESSION_DOTS 12
 #define DOT_RADIUS       4
 #define DOT_SPACING      4
 
 static Phase s_phase = PHASE_WORK;
-static int s_seconds_left = WORK_SECONDS;
-static int s_phase_duration = WORK_SECONDS;
+static int s_seconds_left = 25 * 60;
+static int s_phase_duration = 25 * 60;
 static int s_pomo_count = 0;
 static bool s_running = false;
 static char s_time_buf[8];
@@ -303,7 +316,67 @@ static void show_instruction_overlay(Layer *root, GRect bounds) {
   layer_add_child(root, text_layer_get_layer(s_instr_body_layer));
 }
 
+// Load persisted config values
+static void load_config(void) {
+  if (persist_exists(STORAGE_CFG_WORK)) {
+    WORK_SECONDS = persist_read_int(STORAGE_CFG_WORK);
+  }
+  if (persist_exists(STORAGE_CFG_SHORT)) {
+    SHORT_BREAK_SEC = persist_read_int(STORAGE_CFG_SHORT);
+  }
+  if (persist_exists(STORAGE_CFG_LONG)) {
+    LONG_BREAK_SEC = persist_read_int(STORAGE_CFG_LONG);
+  }
+  if (persist_exists(STORAGE_CFG_POMOS)) {
+    POMOS_BEFORE_LONG = persist_read_int(STORAGE_CFG_POMOS);
+  }
+}
+
+// AppMessage: receive config from phone
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *t;
+
+  t = dict_find(iter, MSG_KEY_WORK_DURATION);
+  if (t) {
+    WORK_SECONDS = (int)t->value->int32 * 60;
+    persist_write_int(STORAGE_CFG_WORK, WORK_SECONDS);
+  }
+
+  t = dict_find(iter, MSG_KEY_SHORT_BREAK);
+  if (t) {
+    SHORT_BREAK_SEC = (int)t->value->int32 * 60;
+    persist_write_int(STORAGE_CFG_SHORT, SHORT_BREAK_SEC);
+  }
+
+  t = dict_find(iter, MSG_KEY_LONG_BREAK);
+  if (t) {
+    LONG_BREAK_SEC = (int)t->value->int32 * 60;
+    persist_write_int(STORAGE_CFG_LONG, LONG_BREAK_SEC);
+  }
+
+  t = dict_find(iter, MSG_KEY_POMOS_BEFORE_LONG);
+  if (t) {
+    POMOS_BEFORE_LONG = (int)t->value->int32;
+    persist_write_int(STORAGE_CFG_POMOS, POMOS_BEFORE_LONG);
+  }
+
+  // Update current phase duration in case it changed
+  s_phase_duration = phase_duration(s_phase);
+  // If the timer is not running, reset seconds_left to match new duration
+  if (!s_running) {
+    s_seconds_left = s_phase_duration;
+  }
+  update_display();
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 static void restore_state(void) {
+  // Load config first so phase_duration() uses correct values
+  load_config();
+
   if (persist_exists(STORAGE_PHASE)) {
     s_phase = (Phase)persist_read_int(STORAGE_PHASE);
   }
@@ -419,6 +492,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_handler,
   });
+
+  // Set up AppMessage for phone config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 128);
 }
 
 static void deinit(void) {
