@@ -5,6 +5,13 @@
 // ---------------------------------------------------------------------------
 #define PERSIST_KEY_PATTERN    1
 #define PERSIST_KEY_FIRST_RUN  2
+#define PERSIST_KEY_DURATION   3
+
+// ---------------------------------------------------------------------------
+// AppMessage keys (must match messageKeys in package.json)
+// ---------------------------------------------------------------------------
+#define MSG_KEY_PATTERN  0
+#define MSG_KEY_DURATION 1
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -379,6 +386,40 @@ static void dismiss_overlay(void) {
 }
 
 // ---------------------------------------------------------------------------
+// AppMessage: receive config from phone
+// ---------------------------------------------------------------------------
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *pattern_t = dict_find(iter, MSG_KEY_PATTERN);
+  if (pattern_t) {
+    int val = pattern_t->value->int32;
+    if (val >= 0 && val < NUM_PATTERNS) {
+      s_pattern_idx = val;
+      persist_write_int(PERSIST_KEY_PATTERN, s_pattern_idx);
+      text_layer_set_text(s_pattern_layer, PATTERNS[s_pattern_idx].name);
+      if (s_running) {
+        start_phase(BREATH_INHALE);
+      }
+    }
+  }
+  Tuple *duration_t = dict_find(iter, MSG_KEY_DURATION);
+  if (duration_t) {
+    int val = duration_t->value->int32;
+    if (val >= 0 && val < NUM_DURATIONS) {
+      s_duration_idx = val;
+      persist_write_int(PERSIST_KEY_DURATION, s_duration_idx);
+      if (!s_running) {
+        snprintf(s_dur_buf, sizeof(s_dur_buf), "Session: %s", SESSION_LABELS[s_duration_idx]);
+        text_layer_set_text(s_duration_layer, s_dur_buf);
+      }
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
+// ---------------------------------------------------------------------------
 // Click handlers
 // ---------------------------------------------------------------------------
 static void select_click(ClickRecognizerRef recognizer, void *context) {
@@ -402,41 +443,8 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
   }
 }
 
-static void select_long_click(ClickRecognizerRef recognizer, void *context) {
-  if (s_show_overlay) { dismiss_overlay(); return; }
-  if (s_running) return;  // don't change duration while running
-
-  s_duration_idx = (s_duration_idx + 1) % NUM_DURATIONS;
-  snprintf(s_dur_buf, sizeof(s_dur_buf), "Session: %s", SESSION_LABELS[s_duration_idx]);
-  text_layer_set_text(s_duration_layer, s_dur_buf);
-  vibes_short_pulse();
-}
-
-static void up_click(ClickRecognizerRef recognizer, void *context) {
-  if (s_show_overlay) { dismiss_overlay(); return; }
-
-  s_pattern_idx = (s_pattern_idx + 1) % NUM_PATTERNS;
-  text_layer_set_text(s_pattern_layer, PATTERNS[s_pattern_idx].name);
-  if (s_running) {
-    start_phase(BREATH_INHALE);
-  }
-}
-
-static void down_click(ClickRecognizerRef recognizer, void *context) {
-  if (s_show_overlay) { dismiss_overlay(); return; }
-
-  s_pattern_idx = (s_pattern_idx + NUM_PATTERNS - 1) % NUM_PATTERNS;
-  text_layer_set_text(s_pattern_layer, PATTERNS[s_pattern_idx].name);
-  if (s_running) {
-    start_phase(BREATH_INHALE);
-  }
-}
-
 static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
-  window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_click, NULL);
-  window_single_click_subscribe(BUTTON_ID_UP, up_click);
-  window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
 }
 
 // ---------------------------------------------------------------------------
@@ -532,8 +540,7 @@ static void window_load(Window *window) {
     text_layer_set_text_alignment(s_instr_body, GTextAlignmentCenter);
     text_layer_set_text(s_instr_body,
       "SEL: Start/Stop\n"
-      "UP/DN: Pattern\n"
-      "Long SEL: Duration\n"
+      "Settings: Phone App\n"
       "Press any button...");
     layer_add_child(root, text_layer_get_layer(s_instr_body));
   }
@@ -568,6 +575,14 @@ static void init(void) {
     }
   }
 
+  // Restore persisted duration index
+  if (persist_exists(PERSIST_KEY_DURATION)) {
+    s_duration_idx = persist_read_int(PERSIST_KEY_DURATION);
+    if (s_duration_idx < 0 || s_duration_idx >= NUM_DURATIONS) {
+      s_duration_idx = 0;
+    }
+  }
+
   // Check first-launch
   if (!persist_exists(PERSIST_KEY_FIRST_RUN) || persist_read_bool(PERSIST_KEY_FIRST_RUN)) {
     s_show_overlay = true;
@@ -577,6 +592,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_handler,
   });
+
+  // Set up AppMessage for config from phone
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
@@ -591,8 +611,9 @@ static void deinit(void) {
   haptic_cancel();
   if (s_tick_timer) app_timer_cancel(s_tick_timer);
 
-  // Persist preferred pattern
+  // Persist preferred pattern and duration
   persist_write_int(PERSIST_KEY_PATTERN, s_pattern_idx);
+  persist_write_int(PERSIST_KEY_DURATION, s_duration_idx);
 
   connection_service_unsubscribe();
   window_destroy(s_window);
