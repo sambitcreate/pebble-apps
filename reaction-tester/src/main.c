@@ -3,11 +3,17 @@
 // Persist keys
 #define PERSIST_KEY_BEST 1
 #define PERSIST_KEY_LAUNCHED 2
+#define PERSIST_KEY_ROUNDS 3
+
+// AppMessage key — must match messageKeys in package.json
+#define MSG_KEY_ROUNDS 0
 
 // Session config
-#define MAX_ROUNDS 10
+#define MAX_ROUNDS_LIMIT 20   // static array ceiling
 #define RING_INTERVAL_MS 20
 #define RING_STEP_PX 6
+
+static int s_max_rounds = 10; // configurable via phone settings
 
 static Window *s_window;
 static StatusBarLayer *s_status_bar;
@@ -42,7 +48,7 @@ static char s_stats_buf[128];
 static char s_round_buf[32];
 
 // Session tracking
-static uint16_t s_session_times[MAX_ROUNDS];
+static uint16_t s_session_times[MAX_ROUNDS_LIMIT];
 static int s_session_count = 0;
 static int s_current_round = 0;
 
@@ -67,7 +73,7 @@ static void set_bg(GColor color) {
 
 static void update_round_display(void) {
   if (s_state == STATE_WAITING || s_state == STATE_READY) {
-    snprintf(s_round_buf, sizeof(s_round_buf), "Round %d/%d", s_current_round, MAX_ROUNDS);
+    snprintf(s_round_buf, sizeof(s_round_buf), "Round %d/%d", s_current_round, s_max_rounds);
     text_layer_set_text(s_round_layer, s_round_buf);
   } else {
     text_layer_set_text(s_round_layer, "");
@@ -250,7 +256,7 @@ static void trigger_fire(void *data) {
 
 static void start_round(void) {
   // Start a new session if needed
-  if (s_current_round == 0 || s_current_round >= MAX_ROUNDS) {
+  if (s_current_round == 0 || s_current_round >= s_max_rounds) {
     s_current_round = 0;
     s_session_count = 0;
   }
@@ -283,7 +289,7 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
       break;
 
     case STATE_RESULT:
-      if (s_current_round >= MAX_ROUNDS) {
+      if (s_current_round >= s_max_rounds) {
         show_summary();
       } else {
         start_round();
@@ -336,7 +342,7 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
       s_state = STATE_RESULT;
 
       // Record in session
-      if (s_session_count < MAX_ROUNDS) {
+      if (s_session_count < s_max_rounds) {
         s_session_times[s_session_count] = s_reaction_ms;
         s_session_count++;
       }
@@ -368,10 +374,10 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
       text_layer_set_text(s_hint_layer, rating);
 
       // Round indicator
-      if (s_current_round >= MAX_ROUNDS) {
-        snprintf(s_round_buf, sizeof(s_round_buf), "Round %d/%d DONE", s_current_round, MAX_ROUNDS);
+      if (s_current_round >= s_max_rounds) {
+        snprintf(s_round_buf, sizeof(s_round_buf), "Round %d/%d DONE", s_current_round, s_max_rounds);
       } else {
-        snprintf(s_round_buf, sizeof(s_round_buf), "Round %d/%d", s_current_round, MAX_ROUNDS);
+        snprintf(s_round_buf, sizeof(s_round_buf), "Round %d/%d", s_current_round, s_max_rounds);
       }
       text_layer_set_text(s_round_layer, s_round_buf);
 
@@ -503,6 +509,23 @@ static void window_unload(Window *window) {
   layer_destroy(s_ring_layer);
 }
 
+// ---------- AppMessage handlers ----------
+
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *rounds_t = dict_find(iter, MSG_KEY_ROUNDS);
+  if (rounds_t) {
+    int val = (int)rounds_t->value->int32;
+    if (val == 5 || val == 10 || val == 15 || val == 20) {
+      s_max_rounds = val;
+      persist_write_int(PERSIST_KEY_ROUNDS, s_max_rounds);
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // ---------- init/deinit ----------
 
 static void init(void) {
@@ -510,6 +533,14 @@ static void init(void) {
 
   // Load persisted best
   load_best();
+
+  // Load persisted rounds setting
+  if (persist_exists(PERSIST_KEY_ROUNDS)) {
+    s_max_rounds = (int)persist_read_int(PERSIST_KEY_ROUNDS);
+    if (s_max_rounds < 5 || s_max_rounds > MAX_ROUNDS_LIMIT) {
+      s_max_rounds = 10;
+    }
+  }
 
   // Check first launch
   if (!persist_exists(PERSIST_KEY_LAUNCHED)) {
@@ -522,6 +553,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bt_handler,
   });
+
+  // AppMessage for phone configuration
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
