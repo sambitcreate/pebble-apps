@@ -41,6 +41,14 @@
 // High score persistence
 #define STORAGE_KEY_HI 1
 
+// Config persistence
+#define STORAGE_KEY_LIVES 2
+#define STORAGE_KEY_DIFFICULTY 3
+
+// AppMessage keys (must match messageKeys in package.json)
+#define MSG_KEY_LIVES 0
+#define MSG_KEY_DIFFICULTY 1
+
 // BT overlay / first-launch overlay timing (frames)
 #define OVERLAY_DURATION 60  // 3 seconds at 50ms/frame
 #define WAVE_BANNER_DURATION 40  // 2 seconds
@@ -48,6 +56,10 @@
 static Window *s_window;
 static Layer *s_canvas;
 static AppTimer *s_timer;
+
+// Configurable settings (persisted via AppMessage)
+static int s_cfg_lives = 3;        // starting lives: 3, 5, or 7
+static int s_cfg_difficulty = 1;   // 0=Easy, 1=Normal, 2=Hard
 
 static int s_player_x;
 static int s_score;
@@ -136,13 +148,22 @@ static void reset_shields(void) {
   }
 }
 
+// Initial move speed based on difficulty: Easy=10, Normal=8, Hard=5
+static int difficulty_move_speed(void) {
+  switch (s_cfg_difficulty) {
+    case 0:  return 10; // Easy
+    case 2:  return 5;  // Hard
+    default: return 8;  // Normal
+  }
+}
+
 static void spawn_aliens(void) {
   s_alien_x = 10;
   s_alien_y = 10;
   s_alien_dx = 2;
   s_aliens_alive = ALIEN_ROWS * ALIEN_COLS;
   s_move_counter = 0;
-  s_move_speed = 8;
+  s_move_speed = difficulty_move_speed();
 
   for (int r = 0; r < ALIEN_ROWS; r++)
     for (int c = 0; c < ALIEN_COLS; c++)
@@ -152,7 +173,7 @@ static void spawn_aliens(void) {
 static void reset_game(void) {
   s_player_x = SCREEN_W / 2 - PLAYER_W / 2;
   s_score = 0;
-  s_lives = 3;
+  s_lives = s_cfg_lives;
   s_game_over = false;
   s_new_high_score = false;
   s_wave = 1;
@@ -708,6 +729,31 @@ static void click_config(void *context) {
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
 }
 
+// AppMessage: receive config from phone
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *lives_t = dict_find(iter, MSG_KEY_LIVES);
+  if (lives_t) {
+    int val = lives_t->value->int32;
+    if (val == 3 || val == 5 || val == 7) {
+      s_cfg_lives = val;
+      persist_write_int(STORAGE_KEY_LIVES, s_cfg_lives);
+    }
+  }
+
+  Tuple *diff_t = dict_find(iter, MSG_KEY_DIFFICULTY);
+  if (diff_t) {
+    int val = diff_t->value->int32;
+    if (val >= 0 && val <= 2) {
+      s_cfg_difficulty = val;
+      persist_write_int(STORAGE_KEY_DIFFICULTY, s_cfg_difficulty);
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 static void bt_handler(bool connected) {
   if (!connected) {
     s_bt_disconnected = true;
@@ -755,6 +801,15 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+
+  // Load persisted config
+  if (persist_exists(STORAGE_KEY_LIVES)) {
+    s_cfg_lives = persist_read_int(STORAGE_KEY_LIVES);
+  }
+  if (persist_exists(STORAGE_KEY_DIFFICULTY)) {
+    s_cfg_difficulty = persist_read_int(STORAGE_KEY_DIFFICULTY);
+  }
+
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -763,6 +818,11 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
   s_timer = app_timer_register(FRAME_MS, game_loop, NULL);
+
+  // Set up AppMessage for config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 }
 
 static void deinit(void) {
