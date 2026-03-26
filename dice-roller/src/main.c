@@ -7,6 +7,11 @@
 #define PERSIST_MIN_BASE    30  // 30..35 = min per die type
 #define PERSIST_MAX_BASE    40  // 40..45 = max per die type
 #define PERSIST_FIRST_LAUNCH 99
+#define PERSIST_SHOW_STATS   100
+
+// ---- AppMessage keys (must match messageKeys in package.json) ----
+#define MSG_KEY_DIE_TYPE   0
+#define MSG_KEY_SHOW_STATS 1
 
 static Window *s_window;
 static StatusBarLayer *s_status_bar;
@@ -384,6 +389,43 @@ static void click_config(void *context) {
   window_long_click_subscribe(BUTTON_ID_DOWN, 500, down_long_click, NULL);
 }
 
+// ---- AppMessage handlers ----
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *die_type_t = dict_find(iter, MSG_KEY_DIE_TYPE);
+  if (die_type_t) {
+    int val = die_type_t->value->int32;
+    if (val >= 0 && val < DIE_COUNT) {
+      s_die_type = (DieType)val;
+      persist_write_int(PERSIST_DIE_TYPE, (int)s_die_type);
+      snprintf(s_type_buf, sizeof(s_type_buf), "[ %s ]", DIE_NAMES[s_die_type]);
+      text_layer_set_text(s_type_layer, s_type_buf);
+      s_result = 0;
+      text_layer_set_text_color(s_result_layer, GColorWhite);
+      text_layer_set_text(s_result_layer, "");
+      text_layer_set_text(s_combo_layer, "");
+      s_last_result = 0;
+      s_combo_count = 0;
+      layer_mark_dirty(s_die_layer);
+      if (s_stats_visible) hide_stats();
+    }
+  }
+
+  Tuple *show_stats_t = dict_find(iter, MSG_KEY_SHOW_STATS);
+  if (show_stats_t) {
+    bool want_stats = (show_stats_t->value->int32 != 0);
+    persist_write_bool(PERSIST_SHOW_STATS, want_stats);
+    if (want_stats) {
+      show_stats();
+    } else {
+      hide_stats();
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
@@ -446,6 +488,11 @@ static void window_load(Window *window) {
   text_layer_set_text_alignment(s_history_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_history_layer));
 
+  // Show stats if persisted preference says so
+  if (s_stats_visible) {
+    show_stats();
+  }
+
   // First-launch overlay
   if (!persist_exists(PERSIST_FIRST_LAUNCH)) {
     show_first_launch_overlay(window);
@@ -483,6 +530,11 @@ static void init(void) {
     .pebble_app_connection_handler = bt_handler,
   });
 
+  // Restore persisted show-stats preference
+  if (persist_exists(PERSIST_SHOW_STATS)) {
+    s_stats_visible = persist_read_bool(PERSIST_SHOW_STATS);
+  }
+
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -491,6 +543,11 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
   accel_tap_service_subscribe(tap_handler);
+
+  // Set up AppMessage for phone config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 128);
 }
 
 static void deinit(void) {
