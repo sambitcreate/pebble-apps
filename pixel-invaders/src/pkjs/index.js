@@ -51,6 +51,25 @@ button:active { background: #1a9a1a; }\
     <label for="d2">Hard - Fast Aliens</label>\
   </div>\
 </div>\
+<div class="group">\
+  <div class="group-label">Color Theme</div>\
+  <div class="option" onclick="document.getElementById(\\\'t0\\\').checked=true">\
+    <input type="radio" name="theme" id="t0" value="0">\
+    <label for="t0"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;margin-right:8px;"></span>Warm Sunset</label>\
+  </div>\
+  <div class="option" onclick="document.getElementById(\\\'t1\\\').checked=true">\
+    <input type="radio" name="theme" id="t1" value="1">\
+    <label for="t1"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;margin-right:8px;"></span>Lavender Dream</label>\
+  </div>\
+  <div class="option" onclick="document.getElementById(\\\'t2\\\').checked=true">\
+    <input type="radio" name="theme" id="t2" value="2">\
+    <label for="t2"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;margin-right:8px;"></span>Cool Ocean</label>\
+  </div>\
+  <div class="option" onclick="document.getElementById(\\\'t3\\\').checked=true">\
+    <input type="radio" name="theme" id="t3" value="3">\
+    <label for="t3"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;margin-right:8px;"></span>Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save Settings</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -58,9 +77,16 @@ try {\
   var cfg = JSON.parse(decodeURIComponent(params));\
   if (cfg.lives) document.getElementById("l" + cfg.lives).checked = true;\
   if (cfg.difficulty !== undefined) document.getElementById("d" + cfg.difficulty).checked = true;\
+  if (cfg.theme !== undefined) {\
+    var te = document.getElementById("t" + cfg.theme);\
+    if (te) te.checked = true;\
+  } else {\
+    document.getElementById("t1").checked = true;\
+  }\
 } catch(e) {\
   document.getElementById("l3").checked = true;\
   document.getElementById("d1").checked = true;\
+  document.getElementById("t1").checked = true;\
 }\
 document.getElementById("save").addEventListener("click", function() {\
   var lives = 3;\
@@ -69,7 +95,10 @@ document.getElementById("save").addEventListener("click", function() {\
   var difficulty = 1;\
   var dradios = document.getElementsByName("difficulty");\
   for (var i = 0; i < dradios.length; i++) { if (dradios[i].checked) { difficulty = parseInt(dradios[i].value); break; } }\
-  var result = { lives: lives, difficulty: difficulty };\
+  var theme = 1;\
+  var tradios = document.getElementsByName("theme");\
+  for (var i = 0; i < tradios.length; i++) { if (tradios[i].checked) { theme = parseInt(tradios[i].value); break; } }\
+  var result = { lives: lives, difficulty: difficulty, theme: theme };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -79,9 +108,11 @@ document.getElementById("save").addEventListener("click", function() {\
 var cfgLives = parseInt(localStorage.getItem('lives')) || 3;
 var cfgDifficulty = parseInt(localStorage.getItem('difficulty'));
 if (isNaN(cfgDifficulty)) cfgDifficulty = 1;
+var cfgTheme = parseInt(localStorage.getItem('theme'));
+if (isNaN(cfgTheme)) cfgTheme = 1;
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ lives: cfgLives, difficulty: cfgDifficulty }));
+  var config = encodeURIComponent(JSON.stringify({ lives: cfgLives, difficulty: cfgDifficulty, theme: cfgTheme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -91,12 +122,15 @@ Pebble.addEventListener('webviewclosed', function(e) {
       var config = JSON.parse(decodeURIComponent(e.response));
       cfgLives = config.lives || 3;
       cfgDifficulty = (config.difficulty !== undefined) ? config.difficulty : 1;
+      cfgTheme = (config.theme !== undefined) ? config.theme : cfgTheme;
       localStorage.setItem('lives', cfgLives.toString());
       localStorage.setItem('difficulty', cfgDifficulty.toString());
+      localStorage.setItem('theme', cfgTheme.toString());
 
       Pebble.sendAppMessage({
         'Lives': cfgLives,
-        'Difficulty': cfgDifficulty
+        'Difficulty': cfgDifficulty,
+        'Theme': cfgTheme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -107,6 +141,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'Lives': cfgLives,
-    'Difficulty': cfgDifficulty
+    'Difficulty': cfgDifficulty,
+    'Theme': cfgTheme
   });
 });

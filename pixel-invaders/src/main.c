@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 #define SCREEN_W 144
 #define SCREEN_H 168
@@ -119,6 +120,10 @@ static char s_score_buf[16];
 static char s_lives_buf[8];
 static char s_wave_buf[16];
 static char s_hi_buf[24];
+
+// Pastel theme
+static PastelTheme s_theme;
+static int s_theme_id = THEME_LAVENDER_DREAM;  // default for games
 
 // Shield positions (computed once)
 static int shield_x(int i) {
@@ -460,7 +465,7 @@ static void draw_explosion(GContext *ctx, Explosion *e) {
   int r = e->frame + 1; // radius grows 1..4
 
   // Draw expanding X/burst pattern
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
 
   // Center dot
   graphics_fill_rect(ctx, GRect(cx - 1, cy - 1, 2, 2), 0, GCornerNone);
@@ -487,7 +492,7 @@ static void draw_shield(GContext *ctx, int i) {
   int hp = s_shield_hp[i];
 
   // Draw shield - visual degradation based on HP
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_theme.muted);
 
   if (hp == 3) {
     // Full shield - solid rect
@@ -515,12 +520,13 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // First-launch overlay
   if (s_first_launch && s_first_launch_timer > 0) {
-    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_context_set_text_color(ctx, s_theme.accent);
     graphics_draw_text(ctx, "PIXEL INVADERS",
                        fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                        GRect(0, 30, SCREEN_W, 30),
                        GTextOverflowModeTrailingEllipsis,
                        GTextAlignmentCenter, NULL);
+    graphics_context_set_text_color(ctx, s_theme.primary);
     graphics_draw_text(ctx, "UP: Move Left",
                        fonts_get_system_font(FONT_KEY_GOTHIC_14),
                        GRect(0, 70, SCREEN_W, 20),
@@ -545,12 +551,13 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   if (s_game_over) {
-    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_context_set_text_color(ctx, s_theme.accent);
     graphics_draw_text(ctx, "GAME OVER",
                        fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                        GRect(0, 35, SCREEN_W, 30),
                        GTextOverflowModeTrailingEllipsis,
                        GTextAlignmentCenter, NULL);
+    graphics_context_set_text_color(ctx, s_theme.primary);
     snprintf(s_score_buf, sizeof(s_score_buf), "Score: %d", s_score);
     graphics_draw_text(ctx, s_score_buf,
                        fonts_get_system_font(FONT_KEY_GOTHIC_18),
@@ -559,6 +566,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                        GTextAlignmentCenter, NULL);
 
     if (s_new_high_score) {
+      graphics_context_set_text_color(ctx, s_theme.highlight);
       graphics_draw_text(ctx, "NEW HIGH SCORE!",
                          fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
                          GRect(0, 88, SCREEN_W, 24),
@@ -583,7 +591,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // Wave banner overlay (drawn on top of game)
   if (s_wave_banner_timer > 0) {
-    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_context_set_text_color(ctx, s_theme.accent);
     snprintf(s_wave_buf, sizeof(s_wave_buf), "WAVE %d", s_wave);
     graphics_draw_text(ctx, s_wave_buf,
                        fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
@@ -594,7 +602,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // Draw aliens
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_theme.secondary);
   for (int r = 0; r < ALIEN_ROWS; r++) {
     for (int c = 0; c < ALIEN_COLS; c++) {
       if (!s_aliens[r][c]) continue;
@@ -608,7 +616,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
       graphics_context_set_fill_color(ctx, GColorBlack);
       graphics_fill_rect(ctx, GRect(ax + 3, ay + 4, 2, 2), 0, GCornerNone);
       graphics_fill_rect(ctx, GRect(ax + 7, ay + 4, 2, 2), 0, GCornerNone);
-      graphics_context_set_fill_color(ctx, GColorWhite);
+      graphics_context_set_fill_color(ctx, s_theme.secondary);
     }
   }
 
@@ -618,13 +626,13 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // Draw player ship
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_theme.accent);
   graphics_fill_rect(ctx, GRect(s_player_x + 6, PLAYER_Y - 2, 4, 2), 0, GCornerNone);
   graphics_fill_rect(ctx, GRect(s_player_x + 2, PLAYER_Y, 12, 4), 0, GCornerNone);
   graphics_fill_rect(ctx, GRect(s_player_x, PLAYER_Y + 4, PLAYER_W, 4), 0, GCornerNone);
 
   // Draw player bullets
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
   for (int i = 0; i < MAX_BULLETS; i++) {
     if (s_bullets[i].active) {
       graphics_fill_rect(ctx, GRect(s_bullets[i].x, s_bullets[i].y, BULLET_W, BULLET_H), 0, GCornerNone);
@@ -632,6 +640,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // Draw alien bullets (dashed look - 2 px wide, alternating)
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
   for (int i = 0; i < MAX_ALIEN_BULLETS; i++) {
     if (s_alien_bullets[i].active) {
       graphics_fill_rect(ctx, GRect(s_alien_bullets[i].x, s_alien_bullets[i].y,
@@ -649,7 +658,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // HUD: score left, wave center, lives right
-  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_context_set_text_color(ctx, s_theme.primary);
   snprintf(s_score_buf, sizeof(s_score_buf), "%d", s_score);
   graphics_draw_text(ctx, s_score_buf,
                      fonts_get_system_font(FONT_KEY_GOTHIC_14),
@@ -673,7 +682,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // BT disconnect alert overlay (drawn on top)
   if (s_bt_disconnected || s_bt_alert_timer > 0) {
-    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_context_set_text_color(ctx, s_theme.highlight);
     graphics_draw_text(ctx, "BT Lost",
                        fonts_get_system_font(FONT_KEY_GOTHIC_14),
                        GRect(0, 0, SCREEN_W, 16),
@@ -748,6 +757,14 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       persist_write_int(STORAGE_KEY_DIFFICULTY, s_cfg_difficulty);
     }
   }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    layer_mark_dirty(s_canvas);
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -810,6 +827,12 @@ static void init(void) {
     s_cfg_difficulty = persist_read_int(STORAGE_KEY_DIFFICULTY);
   }
 
+  // Load persisted theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -822,7 +845,7 @@ static void init(void) {
   // Set up AppMessage for config
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
-  app_message_open(64, 64);
+  app_message_open(128, 64);
 }
 
 static void deinit(void) {

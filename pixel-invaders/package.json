@@ -8,7 +8,8 @@
   "enableMultiJS": true,
   "messageKeys": {
     "Lives": 0,
-    "Difficulty": 1
+    "Difficulty": 1,
+    "Theme": 200
   },
   "pebble": {
     "displayName": "Pixel Invaders",
@@ -21,7 +22,8 @@
     },
     "messageKeys": {
       "Lives": 0,
-      "Difficulty": 1
+      "Difficulty": 1,
+      "Theme": 200
     },
     "resources": {
       "media": []
