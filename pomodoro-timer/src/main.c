@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 static Window *s_window;
 static TextLayer *s_time_layer;
@@ -85,24 +89,7 @@ static void update_display(void) {
   text_layer_set_text(s_time_layer, s_time_buf);
 
   text_layer_set_text(s_phase_layer, phase_name(s_phase));
-
-  // Update phase label color based on current phase
-  GColor phase_color;
-  switch (s_phase) {
-    case PHASE_WORK:
-      phase_color = PBL_IF_COLOR_ELSE(GColorRed, GColorWhite);
-      break;
-    case PHASE_SHORT_BREAK:
-      phase_color = PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite);
-      break;
-    case PHASE_LONG_BREAK:
-      phase_color = PBL_IF_COLOR_ELSE(GColorBlue, GColorWhite);
-      break;
-    default:
-      phase_color = GColorWhite;
-      break;
-  }
-  text_layer_set_text_color(s_phase_layer, phase_color);
+  text_layer_set_text_color(s_phase_layer, s_theme.accent);
 
   snprintf(s_count_buf, sizeof(s_count_buf), "Pomos: %d", s_pomo_count);
   text_layer_set_text(s_count_layer, s_count_buf);
@@ -140,15 +127,7 @@ static void next_phase(void) {
 }
 
 static GColor get_phase_color(void) {
-  switch (s_phase) {
-    case PHASE_WORK:
-      return PBL_IF_COLOR_ELSE(GColorRed, GColorWhite);
-    case PHASE_SHORT_BREAK:
-      return PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite);
-    case PHASE_LONG_BREAK:
-      return PBL_IF_COLOR_ELSE(GColorBlue, GColorWhite);
-  }
-  return GColorWhite;
+  return s_theme.highlight;
 }
 
 static void draw_session_dots(GContext *ctx, GRect bounds) {
@@ -169,11 +148,11 @@ static void draw_session_dots(GContext *ctx, GRect bounds) {
 
     if (i < filled) {
       // Filled dot
-      graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+      graphics_context_set_fill_color(ctx, s_theme.accent);
       graphics_fill_circle(ctx, center, DOT_RADIUS);
     } else {
       // Hollow dot
-      graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+      graphics_context_set_stroke_color(ctx, s_theme.muted);
       graphics_context_set_stroke_width(ctx, 1);
       graphics_draw_circle(ctx, center, DOT_RADIUS);
     }
@@ -193,7 +172,7 @@ static void progress_update(Layer *layer, GContext *ctx) {
   GRect arc_rect = GRect(center.x - 50, center.y - 50, 100, 100);
 
   // Background track
-  graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 6);
   graphics_draw_arc(ctx, arc_rect, GOvalScaleModeFitCircle, 0, TRIG_MAX_ANGLE);
 
@@ -360,6 +339,17 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     persist_write_int(STORAGE_CFG_POMOS, POMOS_BEFORE_LONG);
   }
 
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Re-apply theme colors
+    text_layer_set_text_color(s_phase_layer, s_theme.accent);
+    text_layer_set_text_color(s_time_layer, s_theme.primary);
+    text_layer_set_text_color(s_count_layer, s_theme.secondary);
+  }
+
   // Update current phase duration in case it changed
   s_phase_duration = phase_duration(s_phase);
   // If the timer is not running, reset seconds_left to match new duration
@@ -376,6 +366,12 @@ static void inbox_dropped(AppMessageResult reason, void *context) {
 static void restore_state(void) {
   // Load config first so phase_duration() uses correct values
   load_config();
+
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 
   if (persist_exists(STORAGE_PHASE)) {
     s_phase = (Phase)persist_read_int(STORAGE_PHASE);
@@ -429,7 +425,7 @@ static void window_load(Window *window) {
   // Phase label - above the arc
   s_phase_layer = text_layer_create(GRect(0, center.y - 50 - 30, bounds.size.w, 30));
   text_layer_set_background_color(s_phase_layer, GColorClear);
-  text_layer_set_text_color(s_phase_layer, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+  text_layer_set_text_color(s_phase_layer, s_theme.accent);
   text_layer_set_font(s_phase_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_text_alignment(s_phase_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_phase_layer));
@@ -437,7 +433,7 @@ static void window_load(Window *window) {
   // Time display - centered inside the arc
   s_time_layer = text_layer_create(GRect(0, center.y - 24, bounds.size.w, 50));
   text_layer_set_background_color(s_time_layer, GColorClear);
-  text_layer_set_text_color(s_time_layer, GColorWhite);
+  text_layer_set_text_color(s_time_layer, s_theme.primary);
   text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_time_layer));
@@ -445,7 +441,7 @@ static void window_load(Window *window) {
   // Pomo count - below the arc
   s_count_layer = text_layer_create(GRect(0, center.y + 50 + 4, bounds.size.w, 24));
   text_layer_set_background_color(s_count_layer, GColorClear);
-  text_layer_set_text_color(s_count_layer, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+  text_layer_set_text_color(s_count_layer, s_theme.secondary);
   text_layer_set_font(s_count_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_count_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_count_layer));

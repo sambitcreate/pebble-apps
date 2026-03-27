@@ -10,7 +10,8 @@
     "WorkDuration": 0,
     "ShortBreak": 1,
     "LongBreak": 2,
-    "PomosBeforeLong": 3
+    "PomosBeforeLong": 3,
+    "Theme": 200
   },
   "pebble": {
     "displayName": "Pomodoro Timer",
@@ -25,7 +26,8 @@
       "WorkDuration": 0,
       "ShortBreak": 1,
       "LongBreak": 2,
-      "PomosBeforeLong": 3
+      "PomosBeforeLong": 3,
+      "Theme": 200
     },
     "resources": {
       "media": []
