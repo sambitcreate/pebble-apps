@@ -8,7 +8,8 @@
   "enableMultiJS": true,
   "messageKeys": {
     "DieType": 0,
-    "ShowStats": 1
+    "ShowStats": 1,
+    "Theme": 2
   },
   "pebble": {
     "displayName": "Dice Roller",
@@ -21,7 +22,8 @@
     },
     "messageKeys": {
       "DieType": 0,
-      "ShowStats": 1
+      "ShowStats": 1,
+      "Theme": 2
     },
     "resources": {
       "media": []

@@ -35,6 +35,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <label>Show Stats by Default</label>\
   <label class="toggle"><input type="checkbox" id="showStats"><span class="slider"></span></label>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -42,11 +51,20 @@ try {\
   var cfg = JSON.parse(decodeURIComponent(params));\
   if (cfg.dieType !== undefined) document.getElementById("dieType").value = cfg.dieType;\
   if (cfg.showStats) document.getElementById("showStats").checked = true;\
+  if (cfg.theme !== undefined) {\
+    var tr = document.querySelector("input[name=theme][value=\\"" + cfg.theme + "\\"]");\
+    if (tr) tr.checked = true;\
+  }\
 } catch(e) {}\
+if (!document.querySelector("input[name=theme]:checked")) {\
+  document.querySelector("input[name=theme][value=\\"0\\"]").checked = true;\
+}\
 document.getElementById("save").addEventListener("click", function() {\
+  var themeSel = document.querySelector("input[name=theme]:checked");\
   var result = {\
     dieType: parseInt(document.getElementById("dieType").value, 10),\
-    showStats: document.getElementById("showStats").checked\
+    showStats: document.getElementById("showStats").checked,\
+    theme: themeSel ? parseInt(themeSel.value) : 0\
   };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
@@ -56,11 +74,13 @@ document.getElementById("save").addEventListener("click", function() {\
 
 var dieType = parseInt(localStorage.getItem('dieType') || '1', 10);
 var showStats = localStorage.getItem('showStats') === 'true';
+var theme = parseInt(localStorage.getItem('theme') || '0', 10);
 
 Pebble.addEventListener('showConfiguration', function() {
   var config = encodeURIComponent(JSON.stringify({
     dieType: dieType,
-    showStats: showStats
+    showStats: showStats,
+    theme: theme
   }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
@@ -71,12 +91,15 @@ Pebble.addEventListener('webviewclosed', function(e) {
       var config = JSON.parse(decodeURIComponent(e.response));
       dieType = (config.dieType !== undefined) ? config.dieType : 1;
       showStats = config.showStats || false;
+      theme = (config.theme !== undefined) ? config.theme : 0;
       localStorage.setItem('dieType', dieType.toString());
       localStorage.setItem('showStats', showStats.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
         'DieType': dieType,
-        'ShowStats': showStats ? 1 : 0
+        'ShowStats': showStats ? 1 : 0,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -87,6 +110,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'DieType': dieType,
-    'ShowStats': showStats ? 1 : 0
+    'ShowStats': showStats ? 1 : 0,
+    'Theme': theme
   });
 });

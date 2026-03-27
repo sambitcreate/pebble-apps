@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // ---- Persist keys ----
 #define PERSIST_DIE_TYPE    0
@@ -92,7 +96,7 @@ static void show_first_launch_overlay(Window *window) {
 
   s_overlay_layer = text_layer_create(GRect(10, bounds.size.h / 2 - 40, bounds.size.w - 20, 80));
   text_layer_set_background_color(s_overlay_layer, GColorBlack);
-  text_layer_set_text_color(s_overlay_layer, GColorWhite);
+  text_layer_set_text_color(s_overlay_layer, s_theme.primary);
   text_layer_set_font(s_overlay_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_overlay_layer, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_overlay_layer, GTextOverflowModeWordWrap);
@@ -207,13 +211,13 @@ static void die_layer_update(Layer *layer, GContext *ctx) {
     // Draw D6 face with pips
     graphics_context_set_fill_color(ctx, GColorWhite);
     graphics_fill_rect(ctx, face, 8, GCornersAll);
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
+    graphics_context_set_stroke_color(ctx, s_theme.muted);
     graphics_context_set_stroke_width(ctx, 2);
     graphics_draw_round_rect(ctx, face, 8);
     draw_d6_pips(ctx, s_result, face);
   } else {
     // Draw generic die shape
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+    graphics_context_set_fill_color(ctx, s_theme.muted);
     if (s_die_type == DIE_D4) {
       // Triangle
       GPoint tri[] = {
@@ -237,7 +241,7 @@ static void die_layer_update(Layer *layer, GContext *ctx) {
     // Draw number in center
     snprintf(s_result_buf, sizeof(s_result_buf), "%d", s_result);
     graphics_context_set_text_color(ctx, s_die_type == DIE_D6 ? GColorBlack :
-                                    PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+                                    s_theme.primary);
     graphics_draw_text(ctx, s_result_buf,
                        fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS),
                        GRect(x, y + size/2 - 22, size, 44),
@@ -400,7 +404,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       snprintf(s_type_buf, sizeof(s_type_buf), "[ %s ]", DIE_NAMES[s_die_type]);
       text_layer_set_text(s_type_layer, s_type_buf);
       s_result = 0;
-      text_layer_set_text_color(s_result_layer, GColorWhite);
+      text_layer_set_text_color(s_result_layer, s_theme.primary);
       text_layer_set_text(s_result_layer, "");
       text_layer_set_text(s_combo_layer, "");
       s_last_result = 0;
@@ -408,6 +412,21 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       layer_mark_dirty(s_die_layer);
       if (s_stats_visible) hide_stats();
     }
+  }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Update text layer colors
+    status_bar_layer_set_colors(s_status_bar, GColorBlack, s_theme.primary);
+    text_layer_set_text_color(s_type_layer, s_theme.accent);
+    text_layer_set_text_color(s_combo_layer, s_theme.highlight);
+    text_layer_set_text_color(s_result_layer, s_theme.primary);
+    text_layer_set_text_color(s_stats_layer, s_theme.accent);
+    text_layer_set_text_color(s_history_layer, s_theme.muted);
+    layer_mark_dirty(s_die_layer);
   }
 
   Tuple *show_stats_t = dict_find(iter, MSG_KEY_SHOW_STATS);
@@ -434,7 +453,7 @@ static void window_load(Window *window) {
 
   // Status bar at top (16px)
   s_status_bar = status_bar_layer_create();
-  status_bar_layer_set_colors(s_status_bar, GColorBlack, GColorWhite);
+  status_bar_layer_set_colors(s_status_bar, GColorBlack, s_theme.primary);
   status_bar_layer_set_separator_mode(s_status_bar, StatusBarLayerSeparatorModeDotted);
   layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
 
@@ -443,7 +462,7 @@ static void window_load(Window *window) {
   // Die type label
   s_type_layer = text_layer_create(GRect(0, y_offset, bounds.size.w, 24));
   text_layer_set_background_color(s_type_layer, GColorClear);
-  text_layer_set_text_color(s_type_layer, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+  text_layer_set_text_color(s_type_layer, s_theme.accent);
   text_layer_set_font(s_type_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_type_layer, GTextAlignmentCenter);
   snprintf(s_type_buf, sizeof(s_type_buf), "[ %s ]", DIE_NAMES[s_die_type]);
@@ -458,7 +477,7 @@ static void window_load(Window *window) {
   // Combo streak indicator (positioned to right of die area)
   s_combo_layer = text_layer_create(GRect(bounds.size.w - 50, y_offset + 24, 48, 24));
   text_layer_set_background_color(s_combo_layer, GColorClear);
-  text_layer_set_text_color(s_combo_layer, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+  text_layer_set_text_color(s_combo_layer, s_theme.highlight);
   text_layer_set_font(s_combo_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_combo_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_combo_layer));
@@ -466,7 +485,7 @@ static void window_load(Window *window) {
   // Result text (for non-D6 big number display beneath die)
   s_result_layer = text_layer_create(GRect(0, y_offset + 120, bounds.size.w, 24));
   text_layer_set_background_color(s_result_layer, GColorClear);
-  text_layer_set_text_color(s_result_layer, GColorWhite);
+  text_layer_set_text_color(s_result_layer, s_theme.primary);
   text_layer_set_font(s_result_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_result_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_result_layer));
@@ -474,7 +493,7 @@ static void window_load(Window *window) {
   // Stats layer (shown on long-press Down)
   s_stats_layer = text_layer_create(GRect(4, y_offset + 100, bounds.size.w - 8, 40));
   text_layer_set_background_color(s_stats_layer, GColorClear);
-  text_layer_set_text_color(s_stats_layer, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+  text_layer_set_text_color(s_stats_layer, s_theme.accent);
   text_layer_set_font(s_stats_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_stats_layer, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_stats_layer, GTextOverflowModeWordWrap);
@@ -483,7 +502,7 @@ static void window_load(Window *window) {
   // History
   s_history_layer = text_layer_create(GRect(0, bounds.size.h - 20, bounds.size.w, 20));
   text_layer_set_background_color(s_history_layer, GColorClear);
-  text_layer_set_text_color(s_history_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_history_layer, s_theme.muted);
   text_layer_set_font(s_history_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_history_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_history_layer));
@@ -515,6 +534,12 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 
   // Restore persisted die type
   if (persist_exists(PERSIST_DIE_TYPE)) {
