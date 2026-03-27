@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // ── Constants ──────────────────────────────────────────────────────────
 #define NUM_HOUR_DOTS      12
@@ -94,20 +98,12 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     bool is_current = ((s_hour % 12) == i);
     int r = is_current ? HOUR_DOT_ACTIVE_R : HOUR_DOT_RADIUS;
 
-#ifdef PBL_COLOR
-    graphics_context_set_fill_color(ctx, is_current ? GColorMagenta : GColorMagenta);
-#else
-    graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
+    graphics_context_set_fill_color(ctx, is_current ? s_theme.highlight : s_theme.accent);
     if (is_current) {
       graphics_fill_circle(ctx, dot_pos, r);
     } else {
       // Draw outline for inactive dots
-#ifdef PBL_COLOR
-      graphics_context_set_stroke_color(ctx, GColorMagenta);
-#else
-      graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+      graphics_context_set_stroke_color(ctx, s_theme.accent);
       graphics_context_set_stroke_width(ctx, 1);
       graphics_draw_circle(ctx, dot_pos, r);
     }
@@ -127,13 +123,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   GPoint bob = GPoint(bob_x, bob_y);
 
   // ── Tick marks at 15-second intervals on swing arc ────────────────
-  // Draw small radial marks at the bob's distance showing where
-  // second = 0, 15, 30, 45 would place the pendulum.
-#ifdef PBL_COLOR
-  graphics_context_set_stroke_color(ctx, GColorDarkGray);
-#else
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 1);
 
   for (int i = 0; i < NUM_TICK_MARKS; i++) {
@@ -155,12 +145,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // ── Trail arc (recent swing path) ───────────────────────────────
-  // Draw a faint arc showing where the bob has been over the last few seconds.
-#ifdef PBL_COLOR
-  graphics_context_set_stroke_color(ctx, GColorDarkGray);
-#else
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 1);
 
   {
@@ -183,24 +168,16 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // ── Pendulum line ────────────────────────────────────────────────
-#ifdef PBL_COLOR
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-#else
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.primary);
   graphics_context_set_stroke_width(ctx, 2);
   graphics_draw_line(ctx, pivot, bob);
 
   // ── Small pivot circle ───────────────────────────────────────────
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_theme.primary);
   graphics_fill_circle(ctx, pivot, 3);
 
   // ── Bob (filled circle) ──────────────────────────────────────────
-#ifdef PBL_COLOR
-  graphics_context_set_fill_color(ctx, GColorCyan);
-#else
-  graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
   graphics_fill_circle(ctx, bob, BOB_RADIUS);
 
   // On B&W, add a ring to differentiate the bob from the pivot
@@ -248,6 +225,21 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   layer_mark_dirty(s_canvas);
 }
 
+// ── AppMessage handlers ──────────────────────────────────────────────
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    if (s_canvas) layer_mark_dirty(s_canvas);
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // ── Window callbacks ───────────────────────────────────────────────────
 static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
@@ -275,6 +267,12 @@ static void window_unload(Window *window) {
 
 // ── App lifecycle ──────────────────────────────────────────────────────
 static void init(void) {
+  // Load saved theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   s_window = window_create();
   window_set_window_handlers(s_window, (WindowHandlers){
     .load   = window_load,
@@ -282,6 +280,11 @@ static void init(void) {
   });
   window_stack_push(s_window, true);
   tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+
+  // Set up AppMessage for config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 64);
 }
 
 static void deinit(void) {
