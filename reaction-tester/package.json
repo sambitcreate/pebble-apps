@@ -15,7 +15,8 @@
       "watchface": false
     },
     "messageKeys": {
-      "Rounds": 0
+      "Rounds": 0,
+      "Theme": 1
     },
     "resources": {
       "media": []

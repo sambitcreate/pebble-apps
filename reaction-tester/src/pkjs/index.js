@@ -27,6 +27,13 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <label class="radio-row"><input type="radio" name="rounds" value="15"><span class="radio-dot"></span><span class="radio-label">15 rounds</span></label>\
   <label class="radio-row"><input type="radio" name="rounds" value="20"><span class="radio-dot"></span><span class="radio-label">20 rounds</span></label>\
 </div>\
+<div class="group">\
+  <div class="group-label">Color Theme</div>\
+  <label class="radio-row"><input type="radio" name="theme" value="0"><span class="radio-dot"></span><span class="radio-label"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;margin-right:6px;"></span>Warm Sunset</span></label>\
+  <label class="radio-row"><input type="radio" name="theme" value="1"><span class="radio-dot"></span><span class="radio-label"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;margin-right:6px;"></span>Lavender Dream</span></label>\
+  <label class="radio-row"><input type="radio" name="theme" value="2"><span class="radio-dot"></span><span class="radio-label"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;margin-right:6px;"></span>Cool Ocean</span></label>\
+  <label class="radio-row"><input type="radio" name="theme" value="3"><span class="radio-dot"></span><span class="radio-label"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;margin-right:6px;"></span>Forest Meadow</span></label>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -36,13 +43,21 @@ try {\
   for (var i = 0; i < radios.length; i++) {\
     if (parseInt(radios[i].value) === cfg.rounds) radios[i].checked = true;\
   }\
+  if (cfg.theme !== undefined) {\
+    var tr = document.querySelector("input[name=theme][value=\\"" + cfg.theme + "\\"]");\
+    if (tr) tr.checked = true;\
+  }\
 } catch(e) {}\
 if (!document.querySelector("input[name=rounds]:checked")) {\
   document.querySelector("input[name=rounds][value=\\"10\\"]").checked = true;\
 }\
+if (!document.querySelector("input[name=theme]:checked")) {\
+  document.querySelector("input[name=theme][value=\\"0\\"]").checked = true;\
+}\
 document.getElementById("save").addEventListener("click", function() {\
   var sel = document.querySelector("input[name=rounds]:checked");\
-  var result = { rounds: sel ? parseInt(sel.value) : 10 };\
+  var themeSel = document.querySelector("input[name=theme]:checked");\
+  var result = { rounds: sel ? parseInt(sel.value) : 10, theme: themeSel ? parseInt(themeSel.value) : 0 };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -50,9 +65,10 @@ document.getElementById("save").addEventListener("click", function() {\
 </html>';
 
 var rounds = parseInt(localStorage.getItem('rounds')) || 10;
+var theme = parseInt(localStorage.getItem('theme') || '0', 10);
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ rounds: rounds }));
+  var config = encodeURIComponent(JSON.stringify({ rounds: rounds, theme: theme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -61,10 +77,13 @@ Pebble.addEventListener('webviewclosed', function(e) {
     try {
       var config = JSON.parse(decodeURIComponent(e.response));
       rounds = config.rounds || 10;
+      theme = (config.theme !== undefined) ? config.theme : 0;
       localStorage.setItem('rounds', rounds.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
-        'Rounds': rounds
+        'Rounds': rounds,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -74,6 +93,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
-    'Rounds': rounds
+    'Rounds': rounds,
+    'Theme': theme
   });
 });

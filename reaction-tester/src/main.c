@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // Persist keys
 #define PERSIST_KEY_BEST 1
@@ -161,7 +165,7 @@ static void show_idle(void) {
   stop_ring_animation();
   set_bg(GColorBlack);
   text_layer_set_text(s_main_layer, "REACTION\nTESTER");
-  text_layer_set_text_color(s_main_layer, GColorWhite);
+  text_layer_set_text_color(s_main_layer, s_theme.primary);
   text_layer_set_text(s_result_layer, "");
   text_layer_set_text(s_best_layer, "");
   text_layer_set_text(s_hint_layer, "Press Select to start");
@@ -171,10 +175,10 @@ static void show_idle(void) {
 static void show_summary(void) {
   s_state = STATE_SUMMARY;
   stop_ring_animation();
-  set_bg(PBL_IF_COLOR_ELSE(GColorDukeBlue, GColorBlack));
+  set_bg(GColorBlack);
 
   text_layer_set_text(s_main_layer, "Session\nComplete!");
-  text_layer_set_text_color(s_main_layer, GColorWhite);
+  text_layer_set_text_color(s_main_layer, s_theme.accent);
 
   uint16_t avg = session_average();
   uint16_t best = session_best();
@@ -194,10 +198,10 @@ static void show_summary(void) {
 static void show_stats(void) {
   s_state = STATE_STATS;
   stop_ring_animation();
-  set_bg(PBL_IF_COLOR_ELSE(GColorOxfordBlue, GColorBlack));
+  set_bg(GColorBlack);
 
   text_layer_set_text(s_main_layer, "Stats");
-  text_layer_set_text_color(s_main_layer, GColorWhite);
+  text_layer_set_text_color(s_main_layer, s_theme.primary);
 
   if (s_session_count > 0) {
     uint16_t avg = session_average();
@@ -221,9 +225,9 @@ static void show_stats(void) {
 
 static void show_overlay(void) {
   s_state = STATE_OVERLAY;
-  set_bg(PBL_IF_COLOR_ELSE(GColorDukeBlue, GColorBlack));
+  set_bg(GColorBlack);
   text_layer_set_text(s_main_layer, "Reaction\nTester");
-  text_layer_set_text_color(s_main_layer, GColorWhite);
+  text_layer_set_text_color(s_main_layer, s_theme.primary);
   text_layer_set_text(s_result_layer, "Test your reflexes!");
   text_layer_set_text(s_best_layer, "Select: GO!  Up: Stats");
   text_layer_set_text(s_hint_layer, "Press any button");
@@ -234,8 +238,8 @@ static void trigger_fire(void *data) {
   s_delay_timer = NULL;
   s_state = STATE_READY;
 
-  // Flash screen white and vibrate
-  set_bg(GColorWhite);
+  // Flash screen with theme highlight and vibrate
+  set_bg(s_theme.highlight);
   text_layer_set_text(s_main_layer, "NOW!");
   text_layer_set_text_color(s_main_layer, GColorBlack);
   text_layer_set_text(s_hint_layer, "");
@@ -264,9 +268,9 @@ static void start_round(void) {
   s_current_round++;
   s_state = STATE_WAITING;
   stop_ring_animation();
-  set_bg(PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorBlack));
+  set_bg(GColorBlack);
   text_layer_set_text(s_main_layer, "Wait...");
-  text_layer_set_text_color(s_main_layer, GColorWhite);
+  text_layer_set_text_color(s_main_layer, s_theme.muted);
   text_layer_set_text(s_result_layer, "");
   text_layer_set_text(s_hint_layer, "");
 
@@ -313,9 +317,9 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
       s_state = STATE_TOO_EARLY;
       // Don't count this round - revert round counter
       s_current_round--;
-      set_bg(PBL_IF_COLOR_ELSE(GColorOrange, GColorBlack));
+      set_bg(GColorBlack);
       text_layer_set_text(s_main_layer, "TOO\nEARLY!");
-      text_layer_set_text_color(s_main_layer, PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite));
+      text_layer_set_text_color(s_main_layer, s_theme.highlight);
       text_layer_set_text(s_hint_layer, "Select to retry");
       text_layer_set_text(s_round_layer, "");
 
@@ -356,10 +360,10 @@ static void select_click(ClickRecognizerRef recognizer, void *context) {
         persist_best();
       }
 
-      set_bg(PBL_IF_COLOR_ELSE(GColorIslamicGreen, GColorBlack));
+      set_bg(GColorBlack);
       snprintf(s_result_buf, sizeof(s_result_buf), "%d ms", s_reaction_ms);
       text_layer_set_text(s_main_layer, s_result_buf);
-      text_layer_set_text_color(s_main_layer, GColorWhite);
+      text_layer_set_text_color(s_main_layer, s_theme.primary);
 
       snprintf(s_best_buf, sizeof(s_best_buf), "Best: %d ms", s_best_ms);
       text_layer_set_text(s_best_layer, s_best_buf);
@@ -449,7 +453,7 @@ static void window_load(Window *window) {
   // Round indicator (top, just below status bar)
   s_round_layer = text_layer_create(GRect(0, y_off, bounds.size.w, 18));
   text_layer_set_background_color(s_round_layer, GColorClear);
-  text_layer_set_text_color(s_round_layer, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+  text_layer_set_text_color(s_round_layer, s_theme.accent);
   text_layer_set_font(s_round_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_round_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_round_layer));
@@ -473,7 +477,7 @@ static void window_load(Window *window) {
   // Best time
   s_best_layer = text_layer_create(GRect(0, y_off + 108, bounds.size.w, 20));
   text_layer_set_background_color(s_best_layer, GColorClear);
-  text_layer_set_text_color(s_best_layer, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+  text_layer_set_text_color(s_best_layer, s_theme.accent);
   text_layer_set_font(s_best_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_best_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_best_layer));
@@ -520,6 +524,18 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       persist_write_int(PERSIST_KEY_ROUNDS, s_max_rounds);
     }
   }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Update text layer colors
+    text_layer_set_text_color(s_round_layer, s_theme.accent);
+    text_layer_set_text_color(s_best_layer, s_theme.accent);
+    // Re-apply current state colors
+    if (s_state == STATE_IDLE) show_idle();
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -530,6 +546,12 @@ static void inbox_dropped(AppMessageResult reason, void *context) {
 
 static void init(void) {
   srand(time(NULL));
+
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 
   // Load persisted best
   load_best();
