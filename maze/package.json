@@ -5,11 +5,15 @@
   "keywords": ["pebble-app"],
   "private": true,
   "dependencies": {},
+  "enableMultiJS": true,
+  "messageKeys": {
+    "Theme": 200
+  },
   "pebble": {
     "displayName": "Maze",
     "uuid": "a1b2c3d4-e003-4000-8000-000000000e03",
     "sdkVersion": "3",
-    "enableMultiJS": false,
+    "enableMultiJS": true,
     "targetPlatforms": [
       "basalt",
       "diorite",
@@ -18,7 +22,9 @@
     "watchapp": {
       "watchface": true
     },
-    "messageKeys": {},
+    "messageKeys": {
+      "Theme": 200
+    },
     "resources": {
       "media": []
     }

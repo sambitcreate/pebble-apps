@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 // ---- Maze configuration ----
 #define MAZE_COLS 12
@@ -250,6 +251,10 @@ static int dot_radius(void) {
 static Window *s_window;
 static Layer *s_canvas_layer;
 
+// Pastel theme
+static PastelTheme s_theme;
+static int s_theme_id = THEME_LAVENDER_DREAM;  // default for games
+
 // ---- Check if we can move between cells in the active maze ----
 // Returns true if there is NO wall between (c1,r1) and (c2,r2).
 static bool can_move(int c1, int r1, int c2, int r2) {
@@ -437,16 +442,10 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
-  // Determine colors based on platform
-#ifdef PBL_COLOR
-  GColor wall_color = GColorDarkGray;
-  GColor dot_color = GColorGreen;
-  GColor trail_color = GColorDarkGreen;
-#else
-  GColor wall_color = GColorWhite;
-  GColor dot_color = GColorWhite;
-  GColor trail_color = GColorWhite;
-#endif
+  // Determine colors from theme
+  GColor wall_color = s_theme.muted;
+  GColor dot_color = s_theme.highlight;
+  GColor trail_color = s_theme.accent;
 
   const uint8_t (*maze)[MAZE_COLS] = get_active_maze();
 
@@ -456,22 +455,12 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   if (trail_limit > dot_index) trail_limit = dot_index;
 
   // Draw visited trail (cells along path up to animated visible length)
-#ifdef PBL_COLOR
   graphics_context_set_fill_color(ctx, trail_color);
   for (int i = 0; i <= trail_limit && i < s_path_len; i++) {
     int cx = ox + s_path[i].col * CELL_W + CELL_W / 2;
     int cy = oy + s_path[i].row * CELL_H + CELL_H / 2;
-    graphics_fill_circle(ctx, GPoint(cx, cy), 2);
+    graphics_fill_circle(ctx, GPoint(cx, cy), PBL_IF_COLOR_ELSE(2, 1));
   }
-#else
-  // On B&W, draw a subtle trail with small dots
-  graphics_context_set_fill_color(ctx, trail_color);
-  for (int i = 0; i <= trail_limit && i < s_path_len; i++) {
-    int cx = ox + s_path[i].col * CELL_W + CELL_W / 2;
-    int cy = oy + s_path[i].row * CELL_H + CELL_H / 2;
-    graphics_fill_circle(ctx, GPoint(cx, cy), 1);
-  }
-#endif
 
   // Draw maze walls
   graphics_context_set_stroke_color(ctx, wall_color);
@@ -516,7 +505,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   char buf[8];
   snprintf(buf, sizeof(buf), "%d:%02d", t->tm_hour, t->tm_min);
 
-  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_context_set_text_color(ctx, s_theme.primary);
   GRect text_rect = GRect(0, oy + MAZE_ROWS * CELL_H + 1, bounds.size.w, 22);
   graphics_draw_text(ctx, buf,
     fonts_get_system_font(FONT_KEY_GOTHIC_18),
@@ -524,6 +513,23 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     GTextOverflowModeTrailingEllipsis,
     GTextAlignmentCenter,
     NULL);
+}
+
+// ---- AppMessage handlers ----
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  (void)context;
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    layer_mark_dirty(s_canvas_layer);
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  (void)context;
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
 }
 
 // ---- Tick handler ----
@@ -570,6 +576,12 @@ static void window_unload(Window *window) {
 
 // ---- App lifecycle ----
 static void init(void) {
+  // Load persisted theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   s_window = window_create();
   window_set_background_color(s_window, GColorBlack);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -579,6 +591,11 @@ static void init(void) {
   window_stack_push(s_window, true);
 
   tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+
+  // Set up AppMessage for config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 64);
 }
 
 static void deinit(void) {
