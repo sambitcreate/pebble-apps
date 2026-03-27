@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 // ---------------------------------------------------------------------------
 // Persistent storage keys
@@ -58,6 +59,9 @@ static const char *SESSION_LABELS[]  = {"1 min", "2 min", "5 min", "10 min"};
 // ---------------------------------------------------------------------------
 // UI layers
 // ---------------------------------------------------------------------------
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
+
 static Window *s_window;
 static StatusBarLayer *s_status_bar;
 static Layer *s_canvas;
@@ -244,55 +248,16 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   int cx = bounds.size.w / 2;
   int cy = SB_HEIGHT + (bounds.size.h - SB_HEIGHT) / 2 - 10;
 
-  // Outer boundary ring
-  graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  // Outer boundary ring (guide circle)
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 1);
   graphics_draw_circle(ctx, GPoint(cx, cy), MAX_RADIUS + 4);
 
-  // Phase color
-  GColor base_color;
-  switch (s_phase) {
-    case BREATH_INHALE:
-      base_color = PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite);
-      break;
-    case BREATH_HOLD:
-    case BREATH_HOLD2:
-      base_color = PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
-      break;
-    case BREATH_EXHALE:
-      base_color = PBL_IF_COLOR_ELSE(GColorMagenta, GColorWhite);
-      break;
-    default:
-      base_color = GColorWhite;
-  }
-
-  // Ring colors: inner = brightest, outer = dimmest
-  // On B&W platforms all rings are white; on color we dim outer rings.
+  // Ring colors from theme: inner = highlight, middle = accent, outer = secondary
   GColor ring_colors[NUM_RINGS];
-  ring_colors[0] = base_color;  // inner — brightest
-#ifdef PBL_COLOR
-  switch (s_phase) {
-    case BREATH_INHALE:
-      ring_colors[1] = GColorElectricBlue;
-      ring_colors[2] = GColorCadetBlue;
-      break;
-    case BREATH_HOLD:
-    case BREATH_HOLD2:
-      ring_colors[1] = GColorIcterine;
-      ring_colors[2] = GColorPastelYellow;
-      break;
-    case BREATH_EXHALE:
-      ring_colors[1] = GColorShockingPink;
-      ring_colors[2] = GColorMelon;
-      break;
-    default:
-      ring_colors[1] = GColorLightGray;
-      ring_colors[2] = GColorDarkGray;
-  }
-#else
-  ring_colors[1] = GColorWhite;
-  ring_colors[2] = GColorLightGray;
-#endif
+  ring_colors[0] = s_theme.highlight;
+  ring_colors[1] = s_theme.accent;
+  ring_colors[2] = s_theme.secondary;
 
   int stroke_widths[NUM_RINGS] = {4, 2, 1};
 
@@ -306,7 +271,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 
   // Small filled circle at center for visual anchor
-  graphics_context_set_fill_color(ctx, base_color);
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
   int fill_r = s_ring_radii[0] > 4 ? s_ring_radii[0] - 3 : s_ring_radii[0];
   if (fill_r < 2) fill_r = 2;
   graphics_fill_circle(ctx, GPoint(cx, cy), fill_r);
@@ -413,6 +378,19 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       }
     }
   }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Re-apply theme colors
+    text_layer_set_text_color(s_phase_layer, s_theme.primary);
+    text_layer_set_text_color(s_pattern_layer, s_theme.secondary);
+    text_layer_set_text_color(s_duration_layer, s_theme.muted);
+    text_layer_set_text_color(s_count_layer, s_theme.muted);
+    layer_mark_dirty(s_canvas);
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -478,7 +456,7 @@ static void window_load(Window *window) {
   // Pattern name — shifted down by SB_HEIGHT
   s_pattern_layer = text_layer_create(GRect(0, SB_HEIGHT + 2, bounds.size.w, 20));
   text_layer_set_background_color(s_pattern_layer, GColorClear);
-  text_layer_set_text_color(s_pattern_layer, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+  text_layer_set_text_color(s_pattern_layer, s_theme.secondary);
   text_layer_set_font(s_pattern_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_pattern_layer, GTextAlignmentCenter);
   text_layer_set_text(s_pattern_layer, PATTERNS[s_pattern_idx].name);
@@ -487,7 +465,7 @@ static void window_load(Window *window) {
   // Session duration label
   s_duration_layer = text_layer_create(GRect(0, SB_HEIGHT + 16, bounds.size.w, 20));
   text_layer_set_background_color(s_duration_layer, GColorClear);
-  text_layer_set_text_color(s_duration_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_duration_layer, s_theme.muted);
   text_layer_set_font(s_duration_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_duration_layer, GTextAlignmentCenter);
   snprintf(s_dur_buf, sizeof(s_dur_buf), "Session: %s", SESSION_LABELS[s_duration_idx]);
@@ -502,7 +480,7 @@ static void window_load(Window *window) {
   // Phase text — shifted up slightly to account for status bar
   s_phase_layer = text_layer_create(GRect(0, bounds.size.h - 48, bounds.size.w, 24));
   text_layer_set_background_color(s_phase_layer, GColorClear);
-  text_layer_set_text_color(s_phase_layer, GColorWhite);
+  text_layer_set_text_color(s_phase_layer, s_theme.primary);
   text_layer_set_font(s_phase_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_phase_layer, GTextAlignmentCenter);
   text_layer_set_text(s_phase_layer, "Press Select");
@@ -511,7 +489,7 @@ static void window_load(Window *window) {
   // Cycle count
   s_count_layer = text_layer_create(GRect(0, bounds.size.h - 24, bounds.size.w, 24));
   text_layer_set_background_color(s_count_layer, GColorClear);
-  text_layer_set_text_color(s_count_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_count_layer, s_theme.muted);
   text_layer_set_font(s_count_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_count_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_count_layer));
@@ -582,6 +560,12 @@ static void init(void) {
       s_duration_idx = 0;
     }
   }
+
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 
   // Check first-launch
   if (!persist_exists(PERSIST_KEY_FIRST_RUN) || persist_read_bool(PERSIST_KEY_FIRST_RUN)) {

@@ -8,7 +8,8 @@
   "enableMultiJS": true,
   "messageKeys": {
     "Pattern": 0,
-    "Duration": 1
+    "Duration": 1,
+    "Theme": 200
   },
   "pebble": {
     "displayName": "Breathe",
@@ -21,7 +22,8 @@
     },
     "messageKeys": {
       "Pattern": 0,
-      "Duration": 1
+      "Duration": 1,
+      "Theme": 200
     },
     "resources": {
       "media": []

@@ -47,6 +47,15 @@ button { width: 100%; padding: 14px; margin-top: 24px; font-size: 16px; font-wei
   <label>10 minutes</label>\
   <input type="radio" name="duration" value="3">\
 </div>\
+<h2>Color Theme</h2>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 function sel(el) {\
@@ -74,12 +83,14 @@ try {\
   if (pOpt) sel(pOpt);\
   var dOpt = document.querySelector(".option[data-group=duration][data-val=" + JSON.stringify(cfg.duration) + "]");\
   if (dOpt) sel(dOpt);\
+  if (cfg.theme !== undefined) { var r = document.querySelector("input[name=theme][value=\\\"" + cfg.theme + "\\\"]"); if (r) r.checked = true; }\
 } catch(e) {\
   sel(document.querySelector(".option[data-group=pattern][data-val]"));\
   sel(document.querySelector(".option[data-group=duration][data-val]"));\
 }\
 document.getElementById("save").addEventListener("click", function() {\
-  var result = { pattern: getVal("pattern"), duration: getVal("duration") };\
+  var themeEl = document.querySelector("input[name=theme]:checked");\
+  var result = { pattern: getVal("pattern"), duration: getVal("duration"), theme: themeEl ? parseInt(themeEl.value, 10) : 0 };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -88,9 +99,10 @@ document.getElementById("save").addEventListener("click", function() {\
 
 var pattern = parseInt(localStorage.getItem('pattern') || '0', 10);
 var duration = parseInt(localStorage.getItem('duration') || '0', 10);
+var theme = parseInt(localStorage.getItem('theme') || '0', 10);
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ pattern: pattern, duration: duration }));
+  var config = encodeURIComponent(JSON.stringify({ pattern: pattern, duration: duration, theme: theme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -100,12 +112,15 @@ Pebble.addEventListener('webviewclosed', function(e) {
       var config = JSON.parse(decodeURIComponent(e.response));
       pattern = (typeof config.pattern === 'number') ? config.pattern : 0;
       duration = (typeof config.duration === 'number') ? config.duration : 0;
+      theme = (typeof config.theme === 'number') ? config.theme : 0;
       localStorage.setItem('pattern', pattern.toString());
       localStorage.setItem('duration', duration.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
         'Pattern': pattern,
-        'Duration': duration
+        'Duration': duration,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -116,6 +131,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'Pattern': pattern,
-    'Duration': duration
+    'Duration': duration,
+    'Theme': theme
   });
 });
