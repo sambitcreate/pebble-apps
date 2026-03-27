@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // AppMessage keys — must match messageKeys in package.json
 #define MSG_KEY_VIBRATION 0
@@ -64,7 +68,6 @@ static bool s_revealed = false;
 static void dismiss_overlay(void);
 
 // Answer category: 0-9 positive, 10-14 neutral, 15-19 negative
-#ifdef PBL_COLOR
 typedef enum {
   CATEGORY_POSITIVE,
   CATEGORY_NEUTRAL,
@@ -79,13 +82,12 @@ static AnswerCategory get_category(int index) {
 
 static GColor category_color(AnswerCategory cat) {
   switch (cat) {
-    case CATEGORY_POSITIVE: return GColorGreen;
-    case CATEGORY_NEUTRAL:  return GColorChromeYellow;
-    case CATEGORY_NEGATIVE: return GColorRed;
+    case CATEGORY_POSITIVE: return s_theme.accent;
+    case CATEGORY_NEUTRAL:  return s_theme.secondary;
+    case CATEGORY_NEGATIVE: return s_theme.highlight;
   }
-  return GColorWhite;
+  return s_theme.primary;
 }
-#endif
 
 // Push answer index into history ring
 static void history_push(int answer_idx) {
@@ -201,12 +203,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     };
 
     // Color-coded triangle by category
-    GColor tri_color;
-    #ifdef PBL_COLOR
-      tri_color = category_color(get_category(s_current));
-    #else
-      tri_color = GColorWhite;
-    #endif
+    GColor tri_color = category_color(get_category(s_current));
 
     graphics_context_set_fill_color(ctx, tri_color);
 
@@ -237,13 +234,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
       int idx = s_history[i];
       if (idx < 0) continue;
 
-      GColor dot_color;
-      #ifdef PBL_COLOR
-        dot_color = category_color(get_category(idx));
-      #else
-        (void)idx;
-        dot_color = GColorBlack;
-      #endif
+      GColor dot_color = s_theme.muted;
 
       graphics_context_set_fill_color(ctx, dot_color);
       int dx = start_x + i * 12 + 4;
@@ -275,6 +266,18 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   if (vib_t) {
     s_vibration_enabled = (vib_t->value->int32 != 0);
     persist_write_bool(STORAGE_KEY_VIBRATION, s_vibration_enabled);
+  }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Update UI colors
+    status_bar_layer_set_colors(s_status_bar, GColorBlack, s_theme.primary);
+    text_layer_set_text_color(s_answer_layer, s_theme.primary);
+    text_layer_set_text_color(s_prompt_layer, s_theme.accent);
+    layer_mark_dirty(s_canvas);
   }
 
   Tuple *speed_t = dict_find(iter, MSG_KEY_ANIM_SPEED);
@@ -341,13 +344,11 @@ static void window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(root);
 
-  window_set_background_color(window, PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorWhite));
+  window_set_background_color(window, GColorBlack);
 
   // Status bar at top
   s_status_bar = status_bar_layer_create();
-  status_bar_layer_set_colors(s_status_bar,
-    PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorWhite),
-    PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+  status_bar_layer_set_colors(s_status_bar, GColorBlack, s_theme.primary);
   status_bar_layer_set_separator_mode(s_status_bar, StatusBarLayerSeparatorModeDotted);
   layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
 
@@ -363,7 +364,7 @@ static void window_load(Window *window) {
   // Answer text (inside the triangle area)
   s_answer_layer = text_layer_create(GRect(cx - 40, cy - 25, 80, 50));
   text_layer_set_background_color(s_answer_layer, GColorClear);
-  text_layer_set_text_color(s_answer_layer, PBL_IF_COLOR_ELSE(GColorBlack, GColorBlack));
+  text_layer_set_text_color(s_answer_layer, s_theme.primary);
   text_layer_set_font(s_answer_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_answer_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_answer_layer));
@@ -371,7 +372,7 @@ static void window_load(Window *window) {
   // Prompt text at bottom (above history dots)
   s_prompt_layer = text_layer_create(GRect(0, bounds.size.h - 40, bounds.size.w, 30));
   text_layer_set_background_color(s_prompt_layer, GColorClear);
-  text_layer_set_text_color(s_prompt_layer, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+  text_layer_set_text_color(s_prompt_layer, s_theme.accent);
   text_layer_set_font(s_prompt_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_prompt_layer, GTextAlignmentCenter);
   text_layer_set_text(s_prompt_layer, "Shake me\nor press Select");
@@ -384,7 +385,7 @@ static void window_load(Window *window) {
 
   s_overlay_text = text_layer_create(GRect(10, bounds.size.h / 2 - 40, bounds.size.w - 20, 80));
   text_layer_set_background_color(s_overlay_text, GColorClear);
-  text_layer_set_text_color(s_overlay_text, GColorWhite);
+  text_layer_set_text_color(s_overlay_text, s_theme.highlight);
   text_layer_set_font(s_overlay_text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_text_alignment(s_overlay_text, GTextAlignmentCenter);
   text_layer_set_text(s_overlay_text, "Shake or press\nany button!");
@@ -402,6 +403,12 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 
   // Load persisted config
   if (persist_exists(STORAGE_KEY_VIBRATION)) {

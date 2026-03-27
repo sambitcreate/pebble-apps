@@ -35,6 +35,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <div class="radio-option"><input type="radio" name="speed" id="speed-normal" value="40"><label for="speed-normal">Normal</label></div>\
   <div class="radio-option"><input type="radio" name="speed" id="speed-fast" value="20"><label for="speed-fast">Fast</label></div>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -44,15 +53,24 @@ try {\
   var speedVal = cfg.animSpeed || "40";\
   var radio = document.querySelector("input[name=speed][value=\\"" + speedVal + "\\"]");\
   if (radio) radio.checked = true; else document.getElementById("speed-normal").checked = true;\
+  if (cfg.theme !== undefined) {\
+    var tr = document.querySelector("input[name=theme][value=\\"" + cfg.theme + "\\"]");\
+    if (tr) tr.checked = true;\
+  }\
 } catch(e) {\
   document.getElementById("vibration").checked = true;\
   document.getElementById("speed-normal").checked = true;\
 }\
+if (!document.querySelector("input[name=theme]:checked")) {\
+  document.querySelector("input[name=theme][value=\\"0\\"]").checked = true;\
+}\
 document.getElementById("save").addEventListener("click", function() {\
   var speed = document.querySelector("input[name=speed]:checked");\
+  var themeSel = document.querySelector("input[name=theme]:checked");\
   var result = {\
     vibration: document.getElementById("vibration").checked,\
-    animSpeed: speed ? speed.value : "40"\
+    animSpeed: speed ? speed.value : "40",\
+    theme: themeSel ? parseInt(themeSel.value) : 0\
   };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
@@ -62,11 +80,13 @@ document.getElementById("save").addEventListener("click", function() {\
 
 var vibration = localStorage.getItem('vibration') !== 'false';
 var animSpeed = localStorage.getItem('animSpeed') || '40';
+var theme = parseInt(localStorage.getItem('theme') || '0', 10);
 
 Pebble.addEventListener('showConfiguration', function() {
   var config = encodeURIComponent(JSON.stringify({
     vibration: vibration,
-    animSpeed: animSpeed
+    animSpeed: animSpeed,
+    theme: theme
   }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
@@ -77,12 +97,15 @@ Pebble.addEventListener('webviewclosed', function(e) {
       var config = JSON.parse(decodeURIComponent(e.response));
       vibration = config.vibration || false;
       animSpeed = config.animSpeed || '40';
+      theme = (config.theme !== undefined) ? config.theme : 0;
       localStorage.setItem('vibration', vibration.toString());
       localStorage.setItem('animSpeed', animSpeed);
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
         'Vibration': vibration ? 1 : 0,
-        'AnimSpeed': parseInt(animSpeed, 10)
+        'AnimSpeed': parseInt(animSpeed, 10),
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -93,6 +116,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'Vibration': vibration ? 1 : 0,
-    'AnimSpeed': parseInt(animSpeed, 10)
+    'AnimSpeed': parseInt(animSpeed, 10),
+    'Theme': theme
   });
 });

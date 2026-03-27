@@ -16,7 +16,8 @@
     },
     "messageKeys": {
       "Vibration": 0,
-      "AnimSpeed": 1
+      "AnimSpeed": 1,
+      "Theme": 2
     },
     "resources": {
       "media": []
