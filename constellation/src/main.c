@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // ── Constants ──────────────────────────────────────────────────────────────
 #define NUM_BACKGROUND_STARS 35
@@ -174,6 +178,16 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
     }
   }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Refresh text and canvas
+    if (s_time_layer) text_layer_set_text_color(s_time_layer, s_theme.primary);
+    if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -221,18 +235,14 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     int pole_radius = 1 + (s_battery_pct * 4 / 100);
     if (pole_radius > 5) pole_radius = 5;
     if (pole_radius < 1) pole_radius = 1;
-#ifdef PBL_COLOR
-    // Brighter yellow at high battery, dim red at low
+    // Brightness reflects battery level
     if (s_battery_pct > 60) {
-      graphics_context_set_fill_color(ctx, GColorYellow);
+      graphics_context_set_fill_color(ctx, s_theme.highlight);
     } else if (s_battery_pct > 20) {
-      graphics_context_set_fill_color(ctx, GColorChromeYellow);
+      graphics_context_set_fill_color(ctx, s_theme.accent);
     } else {
-      graphics_context_set_fill_color(ctx, GColorRed);
+      graphics_context_set_fill_color(ctx, s_theme.secondary);
     }
-#else
-    graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
     graphics_fill_circle(ctx, GPoint(POLE_STAR_X, POLE_STAR_Y), pole_radius);
   }
 
@@ -245,11 +255,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   // -- Constellation lines + hand dots --
   bool show_sec = (s_sec_mode != SEC_OFF);
 
-#ifdef PBL_COLOR
-  graphics_context_set_stroke_color(ctx, GColorCyan);
-#else
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.accent);
   graphics_context_set_stroke_width(ctx, 1);
   graphics_draw_line(ctx, hour_pos, minute_pos);
   if (show_sec) {
@@ -259,61 +265,40 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 
   // Second hand: smallest (only when enabled)
   if (show_sec) {
-#ifdef PBL_COLOR
-    graphics_context_set_fill_color(ctx, GColorYellow);
-#else
-    graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
+    graphics_context_set_fill_color(ctx, s_theme.highlight);
     graphics_fill_circle(ctx, second_pos, 1);
   }
 
   // Minute hand: medium
-#ifdef PBL_COLOR
-  graphics_context_set_fill_color(ctx, GColorCyan);
-#else
-  graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_fill_color(ctx, s_theme.accent);
   graphics_fill_circle(ctx, minute_pos, 3);
 
   // Hour hand: largest
-#ifdef PBL_COLOR
-  graphics_context_set_fill_color(ctx, GColorRed);
-#else
-  graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
   graphics_fill_circle(ctx, hour_pos, 4);
 
   // -- Animated shooting star with trail --
   if (s_shooting_active && s_shooting_trail_count > 0) {
     for (int i = 0; i < s_shooting_trail_count; i++) {
       // Fade from dim (oldest) to bright (newest)
-      // i=0 is oldest, i=trail_count-1 is newest (head)
-      int fade = i; // 0..trail_count-1
-      int dot_radius = 1 + fade; // 1 for oldest trail, up to trail_count for head
+      int fade = i;
+      int dot_radius = 1 + fade;
       if (dot_radius > 3) dot_radius = 3;
 
-#ifdef PBL_COLOR
-      // Trail fades from dark yellow to bright white-yellow
+      // Trail fades: oldest = secondary, middle = accent, head = highlight
       if (fade == s_shooting_trail_count - 1) {
-        graphics_context_set_fill_color(ctx, GColorWhite);
+        graphics_context_set_fill_color(ctx, s_theme.highlight);
       } else if (fade >= s_shooting_trail_count / 2) {
-        graphics_context_set_fill_color(ctx, GColorYellow);
+        graphics_context_set_fill_color(ctx, s_theme.accent);
       } else {
-        graphics_context_set_fill_color(ctx, GColorChromeYellow);
+        graphics_context_set_fill_color(ctx, s_theme.secondary);
       }
-#else
-      graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
       graphics_fill_circle(ctx, s_shooting_trail[i], dot_radius);
     }
 
     // Draw connecting lines for the trail
     if (s_shooting_trail_count > 1) {
-#ifdef PBL_COLOR
-      graphics_context_set_stroke_color(ctx, GColorYellow);
-#else
-      graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+      graphics_context_set_stroke_color(ctx, s_theme.highlight);
       graphics_context_set_stroke_width(ctx, 1);
       for (int i = 0; i < s_shooting_trail_count - 1; i++) {
         graphics_draw_line(ctx, s_shooting_trail[i], s_shooting_trail[i + 1]);
@@ -386,11 +371,7 @@ static void window_load(Window *window) {
   // Digital time text at the bottom
   s_time_layer = text_layer_create(GRect(0, bounds.size.h - 20, bounds.size.w, 20));
   text_layer_set_background_color(s_time_layer, GColorClear);
-#ifdef PBL_COLOR
-  text_layer_set_text_color(s_time_layer, GColorLightGray);
-#else
-  text_layer_set_text_color(s_time_layer, GColorWhite);
-#endif
+  text_layer_set_text_color(s_time_layer, s_theme.primary);
   text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_time_layer));
@@ -420,6 +401,12 @@ static void init(void) {
     if (s_sec_mode > SEC_OFF) s_sec_mode = SEC_EVERY_1S;
   }
 
+  // Load saved theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   s_window = window_create();
   window_set_background_color(s_window, GColorBlack);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -433,7 +420,7 @@ static void init(void) {
 
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
-  app_message_open(64, 64);
+  app_message_open(128, 64);
 }
 
 static void deinit(void) {

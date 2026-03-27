@@ -31,6 +31,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <div class="radio"></div>\
   <div><div class="label">No Seconds</div><div class="desc">Hour and minute only, best battery life</div></div>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start; cursor: default;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 function pick(el) {\
@@ -40,13 +49,22 @@ function pick(el) {\
 var params = window.location.hash.substring(1);\
 try {\
   var cfg = JSON.parse(decodeURIComponent(params));\
-  document.querySelectorAll(".option").forEach(function(o) { o.classList.remove("selected"); });\
+  document.querySelectorAll(".option[data-val]").forEach(function(o) { o.classList.remove("selected"); });\
   var sel = document.querySelector(".option[data-val=\\"" + cfg.secMode + "\\"]");\
   if (sel) sel.classList.add("selected");\
-} catch(e) {}\
+  var themeVal = cfg.theme || 0;\
+  var themeEl = document.querySelector("input[name=theme][value=\\"" + themeVal + "\\"]");\
+  if (themeEl) themeEl.checked = true;\
+} catch(e) {\
+  var defTheme = document.querySelector("input[name=theme][value=\\"0\\"]");\
+  if (defTheme) defTheme.checked = true;\
+}\
 document.getElementById("save").addEventListener("click", function() {\
   var val = document.querySelector(".option.selected").getAttribute("data-val");\
-  var result = { secMode: parseInt(val, 10) };\
+  var theme = 0;\
+  var themeRadios = document.getElementsByName("theme");\
+  for (var i = 0; i < themeRadios.length; i++) { if (themeRadios[i].checked) { theme = parseInt(themeRadios[i].value); break; } }\
+  var result = { secMode: parseInt(val, 10), theme: theme };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -54,9 +72,10 @@ document.getElementById("save").addEventListener("click", function() {\
 </html>';
 
 var secMode = parseInt(localStorage.getItem('secMode') || '0', 10);
+var theme = parseInt(localStorage.getItem('theme') || '0', 10);
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ secMode: secMode }));
+  var config = encodeURIComponent(JSON.stringify({ secMode: secMode, theme: theme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -65,9 +84,11 @@ Pebble.addEventListener('webviewclosed', function(e) {
     try {
       var config = JSON.parse(decodeURIComponent(e.response));
       secMode = config.secMode || 0;
+      theme = config.theme || 0;
       localStorage.setItem('secMode', secMode.toString());
+      localStorage.setItem('theme', theme.toString());
 
-      Pebble.sendAppMessage({ 'SecMode': secMode });
+      Pebble.sendAppMessage({ 'SecMode': secMode, 'Theme': theme });
     } catch (err) {
       console.log('Config parse error: ' + err);
     }
@@ -75,5 +96,5 @@ Pebble.addEventListener('webviewclosed', function(e) {
 });
 
 Pebble.addEventListener('ready', function() {
-  Pebble.sendAppMessage({ 'SecMode': secMode });
+  Pebble.sendAppMessage({ 'SecMode': secMode, 'Theme': theme });
 });

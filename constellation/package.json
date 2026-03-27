@@ -19,7 +19,8 @@
     "watchface": true
   },
   "messageKeys": {
-    "SecMode": 0
+    "SecMode": 0,
+    "Theme": 200
   },
   "resources": {
     "media": []
@@ -39,7 +40,8 @@
       "watchface": true
     },
     "messageKeys": {
-      "SecMode": 0
+      "SecMode": 0,
+      "Theme": 200
     },
     "resources": {
       "media": []
