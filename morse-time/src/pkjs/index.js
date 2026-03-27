@@ -34,6 +34,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <div class="radio-option"><input type="radio" name="speed" id="speed1" value="1"><label for="speed1">Normal (100 / 300 ms)</label></div>\
   <div class="radio-option"><input type="radio" name="speed" id="speed2" value="2"><label for="speed2">Fast (60 / 180 ms)</label></div>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -43,14 +52,22 @@ try {\
   var speedVal = cfg.speed || 0;\
   var el = document.getElementById("speed" + speedVal);\
   if (el) el.checked = true;\
+  var themeVal = cfg.theme || 0;\
+  var themeEl = document.querySelector("input[name=theme][value=\\"" + themeVal + "\\"]");\
+  if (themeEl) themeEl.checked = true;\
 } catch(e) {\
   document.getElementById("speed1").checked = true;\
+  var defTheme = document.querySelector("input[name=theme][value=\\"0\\"]");\
+  if (defTheme) defTheme.checked = true;\
 }\
 document.getElementById("save").addEventListener("click", function() {\
   var speed = 1;\
   var radios = document.getElementsByName("speed");\
   for (var i = 0; i < radios.length; i++) { if (radios[i].checked) { speed = parseInt(radios[i].value); break; } }\
-  var result = { use24h: document.getElementById("use24h").checked, speed: speed };\
+  var theme = 0;\
+  var themeRadios = document.getElementsByName("theme");\
+  for (var j = 0; j < themeRadios.length; j++) { if (themeRadios[j].checked) { theme = parseInt(themeRadios[j].value); break; } }\
+  var result = { use24h: document.getElementById("use24h").checked, speed: speed, theme: theme };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -59,9 +76,10 @@ document.getElementById("save").addEventListener("click", function() {\
 
 var use24h = localStorage.getItem('use24h') === 'true';
 var speed = parseInt(localStorage.getItem('speed') || '1', 10);
+var theme = parseInt(localStorage.getItem('theme') || '0', 10);
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ use24h: use24h, speed: speed }));
+  var config = encodeURIComponent(JSON.stringify({ use24h: use24h, speed: speed, theme: theme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -71,12 +89,15 @@ Pebble.addEventListener('webviewclosed', function(e) {
       var config = JSON.parse(decodeURIComponent(e.response));
       use24h = config.use24h || false;
       speed = config.speed || 0;
+      theme = config.theme || 0;
       localStorage.setItem('use24h', use24h.toString());
       localStorage.setItem('speed', speed.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
         'TimeFormat': use24h ? 1 : 0,
-        'Speed': speed
+        'Speed': speed,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -87,6 +108,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'TimeFormat': use24h ? 1 : 0,
-    'Speed': speed
+    'Speed': speed,
+    'Theme': theme
   });
 });

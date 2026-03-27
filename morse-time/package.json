@@ -16,7 +16,8 @@
     },
     "messageKeys": {
       "TimeFormat": 0,
-      "Speed": 1
+      "Speed": 1,
+      "Theme": 200
     },
     "resources": {
       "media": []

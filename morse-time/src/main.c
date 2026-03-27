@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // ── Morse code for digits 0-9 ──
 // dot=0, dash=1, terminated by -1
@@ -141,11 +145,9 @@ static void bars_update_proc(Layer *layer, GContext *ctx) {
 
       // Choose color: active element gets bright highlight
       if (flat == s_active_element) {
-        graphics_context_set_fill_color(ctx,
-          PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+        graphics_context_set_fill_color(ctx, s_theme.highlight);
       } else {
-        graphics_context_set_fill_color(ctx,
-          PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+        graphics_context_set_fill_color(ctx, s_theme.accent);
       }
 
       graphics_fill_rect(ctx, GRect(x, y, bar_w, BAR_HEIGHT), 1, GCornersAll);
@@ -159,8 +161,7 @@ static void bars_update_proc(Layer *layer, GContext *ctx) {
         // Draw colon separator between hours and minutes
         int cx = x + COLON_GAP / 2;
         int dot_r = 2;
-        graphics_context_set_fill_color(ctx,
-          PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+        graphics_context_set_fill_color(ctx, s_theme.muted);
         graphics_fill_circle(ctx, GPoint(cx, y - 2), dot_r);
         graphics_fill_circle(ctx, GPoint(cx, y + BAR_HEIGHT + 2), dot_r);
         x += COLON_GAP;
@@ -364,6 +365,18 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     }
   }
 
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Refresh text layer colors
+    if (s_time_layer) text_layer_set_text_color(s_time_layer, s_theme.primary);
+    if (s_speed_layer) text_layer_set_text_color(s_speed_layer, s_theme.accent);
+    if (s_hint_layer) text_layer_set_text_color(s_hint_layer, s_theme.muted);
+    if (s_bars_layer) layer_mark_dirty(s_bars_layer);
+  }
+
   update_display();
 }
 
@@ -415,7 +428,7 @@ static void window_load(Window *window) {
   // Digital time (large)
   s_time_layer = text_layer_create(GRect(0, y_offset + 10, content_w, 50));
   text_layer_set_background_color(s_time_layer, GColorClear);
-  text_layer_set_text_color(s_time_layer, GColorWhite);
+  text_layer_set_text_color(s_time_layer, s_theme.primary);
   text_layer_set_font(s_time_layer,
     fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
@@ -429,8 +442,7 @@ static void window_load(Window *window) {
   // Speed indicator
   s_speed_layer = text_layer_create(GRect(0, y_offset + 96, content_w, 20));
   text_layer_set_background_color(s_speed_layer, GColorClear);
-  text_layer_set_text_color(s_speed_layer,
-    PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  text_layer_set_text_color(s_speed_layer, s_theme.accent);
   text_layer_set_font(s_speed_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_speed_layer, GTextAlignmentCenter);
@@ -440,8 +452,7 @@ static void window_load(Window *window) {
   s_hint_layer = text_layer_create(
     GRect(0, y_offset + content_h - 24, content_w, 24));
   text_layer_set_background_color(s_hint_layer, GColorClear);
-  text_layer_set_text_color(s_hint_layer,
-    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_hint_layer, s_theme.muted);
   text_layer_set_font(s_hint_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_hint_layer, GTextAlignmentCenter);
@@ -457,8 +468,7 @@ static void window_load(Window *window) {
     s_overlay_text = text_layer_create(
       GRect(10, bounds.size.h / 2 - 55, bounds.size.w - 20, 110));
     text_layer_set_background_color(s_overlay_text, GColorClear);
-    text_layer_set_text_color(s_overlay_text,
-      PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+    text_layer_set_text_color(s_overlay_text, s_theme.highlight);
     text_layer_set_font(s_overlay_text,
       fonts_get_system_font(FONT_KEY_GOTHIC_18));
     text_layer_set_text_alignment(s_overlay_text, GTextAlignmentCenter);
@@ -500,6 +510,12 @@ static void init(void) {
     }
   }
 
+  // Load saved theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   // First-launch check
   if (!persist_exists(KEY_FIRST_LAUNCH)) {
     s_show_overlay = true;
@@ -519,7 +535,7 @@ static void init(void) {
   // Set up AppMessage for phone config
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
-  app_message_open(64, 64);
+  app_message_open(128, 64);
 
   // BT disconnect alert
   connection_service_subscribe((ConnectionHandlers) {
