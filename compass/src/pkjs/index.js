@@ -35,6 +35,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
     <div><label>Responsive</label><div class="desc">Low damping, quick reaction</div></div>\
   </div>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var selected = 85;\
@@ -42,6 +51,7 @@ try {\
   var params = window.location.hash.substring(1);\
   var cfg = JSON.parse(decodeURIComponent(params));\
   if (cfg.damping) selected = cfg.damping;\
+  if (cfg.theme !== undefined) { var r = document.querySelector("input[name=theme][value=\\\"" + cfg.theme + "\\\"]"); if (r) r.checked = true; }\
 } catch(e) {}\
 function updateRadios() {\
   var opts = document.querySelectorAll(".option");\
@@ -63,7 +73,8 @@ for (var i = 0; i < opts.length; i++) {\
   });\
 }\
 document.getElementById("save").addEventListener("click", function() {\
-  var result = { damping: selected };\
+  var themeEl = document.querySelector("input[name=theme]:checked");\
+  var result = { damping: selected, theme: themeEl ? parseInt(themeEl.value, 10) : 0 };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -71,9 +82,10 @@ document.getElementById("save").addEventListener("click", function() {\
 </html>';
 
 var damping = parseInt(localStorage.getItem('damping')) || 85;
+var theme = parseInt(localStorage.getItem('theme'), 10) || 0;
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ damping: damping }));
+  var config = encodeURIComponent(JSON.stringify({ damping: damping, theme: theme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -82,10 +94,13 @@ Pebble.addEventListener('webviewclosed', function(e) {
     try {
       var config = JSON.parse(decodeURIComponent(e.response));
       damping = config.damping || 85;
+      theme = (typeof config.theme === 'number') ? config.theme : 0;
       localStorage.setItem('damping', damping.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
-        'NeedleDamping': damping
+        'NeedleDamping': damping,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -95,6 +110,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
-    'NeedleDamping': damping
+    'NeedleDamping': damping,
+    'Theme': theme
   });
 });

@@ -1,6 +1,10 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 // ─── UI layers ───────────────────────────────────────────────────────────────
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
+
 static Window *s_window;
 static StatusBarLayer *s_status_bar;
 static Layer *s_canvas;
@@ -113,8 +117,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   GPoint center = GPoint(cx, cy);
 
   // Compass circle
-  GColor ring_color = PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray);
-  graphics_context_set_stroke_color(ctx, ring_color);
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 2);
   graphics_draw_circle(ctx, center, 55);
 
@@ -132,13 +135,13 @@ static void canvas_update(Layer *layer, GContext *ctx) {
         .x = cx + (sin_lookup(angle) * outer / TRIG_MAX_RATIO),
         .y = cy - (cos_lookup(angle) * outer / TRIG_MAX_RATIO),
       };
-      graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+      graphics_context_set_stroke_color(ctx, s_theme.secondary);
       graphics_context_set_stroke_width(ctx, 1);
       graphics_draw_line(ctx, p1, p2);
     }
 
     // "Calibrating..." text in center (larger, bolder)
-    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+    graphics_context_set_text_color(ctx, s_theme.secondary);
     graphics_draw_text(ctx, "?",
                        fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
                        GRect(cx - 20, cy - 30, 40, 50),
@@ -167,7 +170,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
       .x = cx + (sin_lookup(angle) * outer / TRIG_MAX_RATIO),
       .y = cy - (cos_lookup(angle) * outer / TRIG_MAX_RATIO),
     };
-    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_color(ctx, s_theme.primary);
     graphics_context_set_stroke_width(ctx, deg % 90 == 0 ? 3 : 1);
     graphics_draw_line(ctx, p1, p2);
   }
@@ -181,7 +184,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     int lx = cx + (sin_lookup(angle) * r / TRIG_MAX_RATIO) - 5;
     int ly = cy - (cos_lookup(angle) * r / TRIG_MAX_RATIO) - 8;
 
-    GColor color = (i == 0) ? PBL_IF_COLOR_ELSE(GColorRed, GColorWhite) : GColorWhite;
+    GColor color = (i == 0) ? s_theme.highlight : s_theme.primary;
     graphics_context_set_text_color(ctx, color);
     graphics_draw_text(ctx, labels[i],
                        fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
@@ -193,17 +196,17 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   // Draw needle — north (red/white)
   gpath_move_to(s_needle_path, center);
   gpath_rotate_to(s_needle_path, 0);
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
   gpath_draw_filled(ctx, s_needle_path);
 
   // Draw needle — south (gray)
   gpath_move_to(s_south_path, center);
   gpath_rotate_to(s_south_path, 0);
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  graphics_context_set_fill_color(ctx, s_theme.muted);
   gpath_draw_filled(ctx, s_south_path);
 
   // Center dot
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_context_set_fill_color(ctx, s_theme.primary);
   graphics_fill_circle(ctx, center, 4);
 }
 
@@ -326,6 +329,20 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       persist_write_int(STORAGE_KEY_FRICTION, s_friction);
     }
   }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Re-apply theme colors
+    text_layer_set_text_color(s_heading_layer, s_theme.primary);
+    text_layer_set_text_color(s_cardinal_layer, s_theme.accent);
+    text_layer_set_text_color(s_status_layer, s_theme.secondary);
+    text_layer_set_text_color(s_cal_instruction_layer, s_theme.secondary);
+    text_layer_set_text_color(s_lock_layer, s_theme.highlight);
+    layer_mark_dirty(s_canvas);
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -365,7 +382,7 @@ static void window_load(Window *window) {
   s_heading_layer = text_layer_create(
       GRect(0, sb_h + bounds.size.w - 5, bounds.size.w, 30));
   text_layer_set_background_color(s_heading_layer, GColorClear);
-  text_layer_set_text_color(s_heading_layer, GColorWhite);
+  text_layer_set_text_color(s_heading_layer, s_theme.primary);
   text_layer_set_font(s_heading_layer,
                       fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_text_alignment(s_heading_layer, GTextAlignmentCenter);
@@ -376,8 +393,7 @@ static void window_load(Window *window) {
   s_cardinal_layer = text_layer_create(
       GRect(0, sb_h + bounds.size.w + 22, bounds.size.w / 2, 24));
   text_layer_set_background_color(s_cardinal_layer, GColorClear);
-  text_layer_set_text_color(s_cardinal_layer,
-                            PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+  text_layer_set_text_color(s_cardinal_layer, s_theme.accent);
   text_layer_set_font(s_cardinal_layer,
                       fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_cardinal_layer, GTextAlignmentCenter);
@@ -388,8 +404,7 @@ static void window_load(Window *window) {
       GRect(bounds.size.w / 2, sb_h + bounds.size.w + 22,
             bounds.size.w / 2, 24));
   text_layer_set_background_color(s_status_layer, GColorClear);
-  text_layer_set_text_color(s_status_layer,
-                            PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+  text_layer_set_text_color(s_status_layer, s_theme.secondary);
   text_layer_set_font(s_status_layer,
                       fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_status_layer, GTextAlignmentCenter);
@@ -399,8 +414,7 @@ static void window_load(Window *window) {
   s_cal_instruction_layer = text_layer_create(
       GRect(10, bounds.size.h - 40, bounds.size.w - 20, 40));
   text_layer_set_background_color(s_cal_instruction_layer, GColorClear);
-  text_layer_set_text_color(s_cal_instruction_layer,
-                            PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorWhite));
+  text_layer_set_text_color(s_cal_instruction_layer, s_theme.secondary);
   text_layer_set_font(s_cal_instruction_layer,
                       fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_cal_instruction_layer, GTextAlignmentCenter);
@@ -411,8 +425,7 @@ static void window_load(Window *window) {
   s_lock_layer = text_layer_create(
       GRect(0, sb_h + bounds.size.w + 42, bounds.size.w, 20));
   text_layer_set_background_color(s_lock_layer, GColorClear);
-  text_layer_set_text_color(s_lock_layer,
-                            PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  text_layer_set_text_color(s_lock_layer, s_theme.highlight);
   text_layer_set_font(s_lock_layer,
                       fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD));
   text_layer_set_text_alignment(s_lock_layer, GTextAlignmentCenter);
@@ -478,6 +491,10 @@ static void init(void) {
   if (persist_exists(STORAGE_KEY_FRICTION)) {
     s_friction = persist_read_int(STORAGE_KEY_FRICTION);
   }
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 
   s_window = window_create();
   window_set_window_handlers(s_window, (WindowHandlers) {

@@ -7,7 +7,8 @@
   "dependencies": {},
   "enableMultiJS": true,
   "messageKeys": {
-    "NeedleDamping": 0
+    "NeedleDamping": 0,
+    "Theme": 200
   },
   "pebble": {
     "displayName": "Compass",
@@ -19,7 +20,8 @@
       "watchface": false
     },
     "messageKeys": {
-      "NeedleDamping": 0
+      "NeedleDamping": 0,
+      "Theme": 200
     },
     "resources": {
       "media": []
