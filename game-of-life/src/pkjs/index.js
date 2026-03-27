@@ -52,6 +52,26 @@ button:active { background: #00cc33; }\
   </select>\
 </div>\
 \
+<div class="section">\
+  <div class="section-title">Color Theme</div>\
+  <div class="option" onclick="document.getElementById(\\\'t0\\\').checked=true">\
+    <input type="radio" name="theme" id="t0" value="0">\
+    <div><label for="t0"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;margin-right:8px;"></span>Warm Sunset</label></div>\
+  </div>\
+  <div class="option" onclick="document.getElementById(\\\'t1\\\').checked=true">\
+    <input type="radio" name="theme" id="t1" value="1">\
+    <div><label for="t1"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;margin-right:8px;"></span>Lavender Dream</label></div>\
+  </div>\
+  <div class="option" onclick="document.getElementById(\\\'t2\\\').checked=true">\
+    <input type="radio" name="theme" id="t2" value="2">\
+    <div><label for="t2"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;margin-right:8px;"></span>Cool Ocean</label></div>\
+  </div>\
+  <div class="option" onclick="document.getElementById(\\\'t3\\\').checked=true">\
+    <input type="radio" name="theme" id="t3" value="3">\
+    <div><label for="t3"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;margin-right:8px;"></span>Forest Meadow</label></div>\
+  </div>\
+</div>\
+\
 <button id="save">Apply Settings</button>\
 \
 <script>\
@@ -65,7 +85,15 @@ try {\
   if (cfg.pattern !== undefined) {\
     document.getElementById("pattern").value = cfg.pattern.toString();\
   }\
-} catch(e) {}\
+  if (cfg.theme !== undefined) {\
+    var te = document.getElementById("t" + cfg.theme);\
+    if (te) te.checked = true;\
+  } else {\
+    document.getElementById("t1").checked = true;\
+  }\
+} catch(e) {\
+  document.getElementById("t1").checked = true;\
+}\
 document.getElementById("save").addEventListener("click", function() {\
   var speed = 1;\
   var radios = document.getElementsByName("speed");\
@@ -73,7 +101,12 @@ document.getElementById("save").addEventListener("click", function() {\
     if (radios[i].checked) { speed = parseInt(radios[i].value); break; }\
   }\
   var pattern = parseInt(document.getElementById("pattern").value);\
-  var result = { speed: speed, pattern: pattern };\
+  var theme = 1;\
+  var tradios = document.getElementsByName("theme");\
+  for (var i = 0; i < tradios.length; i++) {\
+    if (tradios[i].checked) { theme = parseInt(tradios[i].value); break; }\
+  }\
+  var result = { speed: speed, pattern: pattern, theme: theme };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -82,11 +115,14 @@ document.getElementById("save").addEventListener("click", function() {\
 
 var speedPreset = parseInt(localStorage.getItem('speedPreset') || '1');
 var seedPattern = parseInt(localStorage.getItem('seedPattern') || '0');
+var cfgTheme = parseInt(localStorage.getItem('theme'));
+if (isNaN(cfgTheme)) cfgTheme = 1;
 
 Pebble.addEventListener('showConfiguration', function() {
   var config = encodeURIComponent(JSON.stringify({
     speed: speedPreset,
-    pattern: seedPattern
+    pattern: seedPattern,
+    theme: cfgTheme
   }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
@@ -97,12 +133,15 @@ Pebble.addEventListener('webviewclosed', function(e) {
       var config = JSON.parse(decodeURIComponent(e.response));
       speedPreset = (config.speed !== undefined) ? config.speed : speedPreset;
       seedPattern = (config.pattern !== undefined) ? config.pattern : seedPattern;
+      cfgTheme = (config.theme !== undefined) ? config.theme : cfgTheme;
       localStorage.setItem('speedPreset', speedPreset.toString());
       localStorage.setItem('seedPattern', seedPattern.toString());
+      localStorage.setItem('theme', cfgTheme.toString());
 
       Pebble.sendAppMessage({
         'SpeedPreset': speedPreset,
-        'SeedPattern': seedPattern
+        'SeedPattern': seedPattern,
+        'Theme': cfgTheme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -113,6 +152,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'SpeedPreset': speedPreset,
-    'SeedPattern': seedPattern
+    'SeedPattern': seedPattern,
+    'Theme': cfgTheme
   });
 });

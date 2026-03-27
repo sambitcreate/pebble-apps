@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 // ---------------------------------------------------------------------------
 // Grid constants
@@ -62,6 +63,10 @@ static uint8_t s_cell_age[GRID_H][GRID_W];  // age tracking for color heat map
 
 static TextLayer *s_gen_layer;
 static char       s_gen_buf[32];
+
+// Pastel theme
+static PastelTheme s_theme;
+static int s_theme_id = THEME_LAVENDER_DREAM;  // default for games
 
 // BT disconnect alert
 static bool s_bt_connected = true;
@@ -243,16 +248,13 @@ static void step_simulation(void) {
   }
 }
 
-// ===== Cell color by age (color platforms) ==================================
+// ===== Cell color by age ====================================================
 
-#ifdef PBL_COLOR
 static GColor color_for_age(uint8_t age) {
-  if (age == 0)       return GColorGreen;        // newborn = bright green
-  if (age <= 5)       return GColorYellow;        // young = yellow
-  if (age <= 10)      return GColorOrange;        // mature = orange
-  return GColorRed;                               // elder = red
+  if (age == 0)       return s_theme.highlight;   // newborn
+  if (age <= 5)       return s_theme.accent;      // established
+  return s_theme.secondary;                       // old
 }
-#endif
 
 // ===== Drawing =============================================================
 
@@ -271,7 +273,7 @@ static void draw_population_graph(GContext *ctx, GRect bounds) {
   graphics_fill_rect(ctx, GRect(0, graph_y, bounds.size.w, POP_GRAPH_H), 0, GCornerNone);
 
   // Draw population bars
-  graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
 
   int draw_count = s_pop_wrapped ? POP_HISTORY : s_pop_idx;
   // Each bar: spread across screen width
@@ -306,11 +308,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   for (int y = 0; y < GRID_H; y++) {
     for (int x = 0; x < GRID_W; x++) {
       if (s_grid[y][x]) {
-#ifdef PBL_COLOR
         graphics_context_set_fill_color(ctx, color_for_age(s_cell_age[y][x]));
-#else
-        graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
         graphics_fill_rect(ctx,
           GRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE - 1, CELL_SIZE - 1),
           0, GCornerNone);
@@ -327,7 +325,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // BT disconnect warning
   if (!s_bt_connected) {
-    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+    graphics_context_set_text_color(ctx, s_theme.highlight);
     graphics_draw_text(ctx, "BT!",
       fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
       GRect(0, 0, bounds.size.w, 20),
@@ -338,7 +336,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // Speed indicator (shown briefly when changed)
   if (s_show_speed) {
-    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+    graphics_context_set_text_color(ctx, s_theme.secondary);
     graphics_draw_text(ctx,
       s_speed_names[s_speed_idx],
       fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD),
@@ -350,7 +348,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   // First-launch overlay
   if (s_first_launch) {
-    graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+    graphics_context_set_text_color(ctx, s_theme.accent);
     graphics_draw_text(ctx,
       "UP:Random\nSEL:Pause\nDN:Speed\nHold UP:Pattern\nHold DN:Gun",
       fonts_get_system_font(FONT_KEY_GOTHIC_14),
@@ -486,6 +484,15 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       layer_mark_dirty(s_canvas);
     }
   }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    text_layer_set_text_color(s_gen_layer, s_theme.accent);
+    layer_mark_dirty(s_canvas);
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -507,7 +514,7 @@ static void window_load(Window *window) {
   int gen_y = bounds.size.h - POP_GRAPH_H - 16;
   s_gen_layer = text_layer_create(GRect(0, gen_y, bounds.size.w, 16));
   text_layer_set_background_color(s_gen_layer, GColorClear);
-  text_layer_set_text_color(s_gen_layer, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+  text_layer_set_text_color(s_gen_layer, s_theme.accent);
   text_layer_set_font(s_gen_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_gen_layer, GTextAlignmentRight);
   layer_add_child(root, text_layer_get_layer(s_gen_layer));
@@ -537,6 +544,12 @@ static void init(void) {
     s_pattern_idx = persist_read_int(STORAGE_KEY_PATTERN);
     if (s_pattern_idx < 0 || s_pattern_idx >= PATTERN_COUNT) s_pattern_idx = 0;
   }
+
+  // Load persisted theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
