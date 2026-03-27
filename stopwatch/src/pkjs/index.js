@@ -33,6 +33,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <label>Show Lap Deltas</label>\
   <label class="toggle"><input type="checkbox" id="showLapDeltas"><span class="slider"></span></label>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -40,11 +49,14 @@ try {\
   var cfg = JSON.parse(decodeURIComponent(params));\
   if (cfg.maxLaps) document.getElementById("maxLaps").value = cfg.maxLaps.toString();\
   if (cfg.showLapDeltas) document.getElementById("showLapDeltas").checked = true;\
+  if (cfg.theme !== undefined) { var r = document.querySelector("input[name=theme][value=\\\"" + cfg.theme + "\\\"]"); if (r) r.checked = true; }\
 } catch(e) {}\
 document.getElementById("save").addEventListener("click", function() {\
+  var themeEl = document.querySelector("input[name=theme]:checked");\
   var result = {\
     maxLaps: parseInt(document.getElementById("maxLaps").value, 10),\
-    showLapDeltas: document.getElementById("showLapDeltas").checked\
+    showLapDeltas: document.getElementById("showLapDeltas").checked,\
+    theme: themeEl ? parseInt(themeEl.value, 10) : 0\
   };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
@@ -54,11 +66,13 @@ document.getElementById("save").addEventListener("click", function() {\
 
 var maxLaps = parseInt(localStorage.getItem('maxLaps'), 10) || 20;
 var showLapDeltas = localStorage.getItem('showLapDeltas') !== 'false';
+var theme = parseInt(localStorage.getItem('theme'), 10) || 0;
 
 Pebble.addEventListener('showConfiguration', function() {
   var config = encodeURIComponent(JSON.stringify({
     maxLaps: maxLaps,
-    showLapDeltas: showLapDeltas
+    showLapDeltas: showLapDeltas,
+    theme: theme
   }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
@@ -69,12 +83,15 @@ Pebble.addEventListener('webviewclosed', function(e) {
       var config = JSON.parse(decodeURIComponent(e.response));
       maxLaps = config.maxLaps || 20;
       showLapDeltas = config.showLapDeltas || false;
+      theme = (typeof config.theme === 'number') ? config.theme : 0;
       localStorage.setItem('maxLaps', maxLaps.toString());
       localStorage.setItem('showLapDeltas', showLapDeltas.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
         'MaxLaps': maxLaps,
-        'ShowLapDeltas': showLapDeltas ? 1 : 0
+        'ShowLapDeltas': showLapDeltas ? 1 : 0,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -85,6 +102,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'MaxLaps': maxLaps,
-    'ShowLapDeltas': showLapDeltas ? 1 : 0
+    'ShowLapDeltas': showLapDeltas ? 1 : 0,
+    'Theme': theme
   });
 });

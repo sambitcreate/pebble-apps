@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 #define TICK_MS 100
 #define MAX_LAPS_LIMIT 99  // absolute maximum array size
@@ -17,6 +18,9 @@
 #define KEY_FIRST_LAUNCH 104
 #define KEY_CFG_MAX_LAPS 105
 #define KEY_CFG_SHOW_DELTAS 106
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 static Window *s_window;
 static StatusBarLayer *s_status_bar;
@@ -95,7 +99,7 @@ static void update_display(void) {
     text_layer_set_text_color(s_delta_layer,
       PBL_IF_COLOR_ELSE(
         (s_lap_delta > 0) ? GColorRed : GColorGreen,
-        GColorWhite));
+        s_theme.primary));
   } else {
     text_layer_set_text(s_delta_layer, "");
   }
@@ -115,7 +119,7 @@ static void arc_update_proc(Layer *layer, GContext *ctx) {
   int radius = (bounds.size.w < bounds.size.h ? bounds.size.w : bounds.size.h) / 2 - 4;
 
   // Background circle (dim ring)
-  graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 3);
   graphics_draw_circle(ctx, center, radius);
 
@@ -128,7 +132,7 @@ static void arc_update_proc(Layer *layer, GContext *ctx) {
   int32_t end_angle = (int32_t)angle_deg * TRIG_MAX_ANGLE / 360;
   if (end_angle == 0) end_angle = TRIG_MAX_ANGLE;  // full circle at 0 seconds
 
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  graphics_context_set_fill_color(ctx, s_theme.highlight);
 
   // Draw filled arc using graphics_fill_radial
   graphics_fill_radial(ctx, bounds, GOvalScaleModeFitCircle,
@@ -249,8 +253,7 @@ static void window_load(Window *window) {
   // State label
   s_state_layer = text_layer_create(GRect(0, y_offset + 2, content_w, 20));
   text_layer_set_background_color(s_state_layer, GColorClear);
-  text_layer_set_text_color(s_state_layer,
-    PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+  text_layer_set_text_color(s_state_layer, s_theme.accent);
   text_layer_set_font(s_state_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_state_layer, GTextAlignmentCenter);
@@ -259,7 +262,7 @@ static void window_load(Window *window) {
   // Main time (centered over the arc)
   s_time_layer = text_layer_create(GRect(0, y_offset + 42, content_w, 55));
   text_layer_set_background_color(s_time_layer, GColorClear);
-  text_layer_set_text_color(s_time_layer, GColorWhite);
+  text_layer_set_text_color(s_time_layer, s_theme.primary);
   text_layer_set_font(s_time_layer,
     fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
@@ -280,8 +283,7 @@ static void window_load(Window *window) {
     s_lap_layers[i] = text_layer_create(
       GRect(10, lap_y + i * 18, content_w - 20, 18));
     text_layer_set_background_color(s_lap_layers[i], GColorClear);
-    text_layer_set_text_color(s_lap_layers[i],
-      PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+    text_layer_set_text_color(s_lap_layers[i], s_theme.secondary);
     text_layer_set_font(s_lap_layers[i],
       fonts_get_system_font(FONT_KEY_GOTHIC_14));
     text_layer_set_text_alignment(s_lap_layers[i], GTextAlignmentLeft);
@@ -297,8 +299,7 @@ static void window_load(Window *window) {
     s_overlay_text = text_layer_create(
       GRect(10, bounds.size.h / 2 - 45, bounds.size.w - 20, 90));
     text_layer_set_background_color(s_overlay_text, GColorClear);
-    text_layer_set_text_color(s_overlay_text,
-      PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+    text_layer_set_text_color(s_overlay_text, s_theme.highlight);
     text_layer_set_font(s_overlay_text,
       fonts_get_system_font(FONT_KEY_GOTHIC_18));
     text_layer_set_text_alignment(s_overlay_text, GTextAlignmentCenter);
@@ -360,6 +361,10 @@ static void load_state(void) {
   if (persist_exists(KEY_CFG_SHOW_DELTAS)) {
     s_show_lap_deltas = persist_read_bool(KEY_CFG_SHOW_DELTAS);
   }
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
 }
 
 // AppMessage: receive config from phone
@@ -377,6 +382,20 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   if (show_deltas_t) {
     s_show_lap_deltas = (show_deltas_t->value->int32 != 0);
     persist_write_bool(KEY_CFG_SHOW_DELTAS, s_show_lap_deltas);
+    update_display();
+  }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Re-apply theme colors to all layers
+    text_layer_set_text_color(s_state_layer, s_theme.accent);
+    text_layer_set_text_color(s_time_layer, s_theme.primary);
+    for (int i = 0; i < 3; i++) {
+      text_layer_set_text_color(s_lap_layers[i], s_theme.secondary);
+    }
     update_display();
   }
 }

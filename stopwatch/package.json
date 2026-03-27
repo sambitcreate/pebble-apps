@@ -8,7 +8,8 @@
   "enableMultiJS": true,
   "messageKeys": {
     "MaxLaps": 0,
-    "ShowLapDeltas": 1
+    "ShowLapDeltas": 1,
+    "Theme": 200
   },
   "pebble": {
     "displayName": "Stopwatch",
@@ -21,7 +22,8 @@
     },
     "messageKeys": {
       "MaxLaps": 0,
-      "ShowLapDeltas": 1
+      "ShowLapDeltas": 1,
+      "Theme": 200
     },
     "resources": {
       "media": []
