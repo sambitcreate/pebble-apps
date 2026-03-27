@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // ---------------------------------------------------------------------------
 // Tetromino Watchface
@@ -69,46 +73,21 @@ static const uint8_t DIGIT_PATTERNS[10][DIGIT_H] = {
   { 0x7, 0x5, 0x7, 0x1, 0x7 },  // 9: 111,101,111,001,111
 };
 
-// Classic Tetris piece colors (for color displays)
-// 0=cyan, 1=yellow, 2=magenta, 3=green, 4=red, 5=orange, 6=blue
+// Theme-based block colors
 #ifdef PBL_COLOR
 static GColor get_tetris_color(int color_index) {
-  switch (color_index % 7) {
-    case 0: return GColorCyan;
-    case 1: return GColorYellow;
-    case 2: return GColorMagenta;
-    case 3: return GColorGreen;
-    case 4: return GColorRed;
-    case 5: return GColorOrange;
-    case 6: return GColorBlue;
-    default: return GColorWhite;
-  }
+  (void)color_index;
+  return s_theme.accent;
 }
 
 static GColor get_highlight_color(int color_index) {
-  switch (color_index % 7) {
-    case 0: return GColorCeleste;
-    case 1: return GColorPastelYellow;
-    case 2: return GColorRichBrilliantLavender;
-    case 3: return GColorMintGreen;
-    case 4: return GColorMelon;
-    case 5: return GColorRajah;
-    case 6: return GColorVeryLightBlue;
-    default: return GColorWhite;
-  }
+  (void)color_index;
+  return s_theme.secondary;
 }
 
 static GColor get_shadow_color(int color_index) {
-  switch (color_index % 7) {
-    case 0: return GColorTiffanyBlue;
-    case 1: return GColorChromeYellow;
-    case 2: return GColorPurple;
-    case 3: return GColorIslamicGreen;
-    case 4: return GColorDarkCandyAppleRed;
-    case 5: return GColorWindsorTan;
-    case 6: return GColorDukeBlue;
-    default: return GColorLightGray;
-  }
+  (void)color_index;
+  return s_theme.muted;
 }
 #endif
 
@@ -477,11 +456,7 @@ static void main_window_load(Window *window) {
   GRect date_rect = GRect(0, bounds.size.h - date_h - 18, bounds.size.w, date_h);
   s_date_layer = text_layer_create(date_rect);
   text_layer_set_background_color(s_date_layer, GColorClear);
-#ifdef PBL_COLOR
-  text_layer_set_text_color(s_date_layer, GColorLightGray);
-#else
-  text_layer_set_text_color(s_date_layer, GColorWhite);
-#endif
+  text_layer_set_text_color(s_date_layer, s_theme.secondary);
   text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
   layer_add_child(window_layer, text_layer_get_layer(s_date_layer));
@@ -491,11 +466,7 @@ static void main_window_load(Window *window) {
   GRect lines_rect = GRect(0, bounds.size.h - lines_h - 2, bounds.size.w, lines_h);
   s_lines_layer = text_layer_create(lines_rect);
   text_layer_set_background_color(s_lines_layer, GColorClear);
-#ifdef PBL_COLOR
-  text_layer_set_text_color(s_lines_layer, GColorDarkGray);
-#else
-  text_layer_set_text_color(s_lines_layer, GColorWhite);
-#endif
+  text_layer_set_text_color(s_lines_layer, s_theme.muted);
   text_layer_set_font(s_lines_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_lines_layer, GTextAlignmentCenter);
   layer_add_child(window_layer, text_layer_get_layer(s_lines_layer));
@@ -544,8 +515,36 @@ static void main_window_unload(Window *window) {
   text_layer_destroy(s_lines_layer);
 }
 
+// ---- AppMessage handler ----
+
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Update text layer colors
+    text_layer_set_text_color(s_date_layer, s_theme.secondary);
+    text_layer_set_text_color(s_lines_layer, s_theme.muted);
+    // Trigger redraw
+    if (s_canvas_layer) {
+      layer_mark_dirty(s_canvas_layer);
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // Init
 static void init(void) {
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   s_main_window = window_create();
   window_set_background_color(s_main_window, GColorBlack);
   window_set_window_handlers(s_main_window, (WindowHandlers) {
@@ -555,6 +554,11 @@ static void init(void) {
   window_stack_push(s_main_window, true);
 
   tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+
+  // Set up AppMessage for theme config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 }
 
 // Deinit

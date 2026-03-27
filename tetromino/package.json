@@ -6,7 +6,7 @@
     "displayName": "Tetromino",
     "uuid": "a1b2c3d4-e005-4000-8000-000000000e05",
     "sdkVersion": "3",
-    "enableMultiJS": false,
+    "enableMultiJS": true,
     "watchapp": {
       "watchface": true
     },
@@ -18,7 +18,9 @@
     "resources": {
       "media": []
     },
-    "messageKeys": {}
+    "messageKeys": {
+      "Theme": 0
+    }
   },
   "dependencies": {},
   "devDependencies": {},
