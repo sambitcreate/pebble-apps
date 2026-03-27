@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // --- Constants ---
 #define TRAIL_LENGTH 8
@@ -86,29 +90,14 @@ static void draw_trail(GContext *ctx, Trail *trail, int base_radius, GColor colo
     int r = base_radius - age;
     if (r < 1) r = 1;
 
-    // On color platforms, use a dimmer shade for older trail dots.
-#if defined(PBL_COLOR)
-    // Reduce alpha-like effect by using darker shades for older dots.
-    // We approximate fading by adjusting the color channels.
-    if (age >= 5) {
-      // Very old trail points: barely visible
-      graphics_context_set_fill_color(ctx, GColorDarkGray);
-    } else if (age >= 3) {
-      GColor dim = GColorDarkGray;
-      graphics_context_set_fill_color(ctx, dim);
+    // Fade trail dots: recent positions use hand color, older use muted
+    if (age >= 3) {
+      graphics_context_set_fill_color(ctx, s_theme.muted);
     } else if (age >= 2) {
-      // Use a mid-gray tinted toward the hand color
-      graphics_context_set_fill_color(ctx, GColorLightGray);
+      graphics_context_set_fill_color(ctx, s_theme.muted);
     } else {
       graphics_context_set_fill_color(ctx, color);
     }
-#else
-    if (age >= 3) {
-      graphics_context_set_fill_color(ctx, GColorDarkGray);
-    } else {
-      graphics_context_set_fill_color(ctx, GColorWhite);
-    }
-#endif
 
     draw_dot(ctx, trail->positions[i], r);
   }
@@ -146,11 +135,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   draw_battery_arc(ctx, center);
 
   // Draw orbit path rings (faint).
-#if defined(PBL_COLOR)
-  graphics_context_set_stroke_color(ctx, GColorDarkGray);
-#else
-  graphics_context_set_stroke_color(ctx, GColorDarkGray);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 1);
 
   draw_orbit_ring(ctx, center, HOUR_ORBIT_RADIUS);
@@ -170,16 +155,9 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   GPoint second_pt = orbit_point(center, SECOND_ORBIT_RADIUS, second_angle);
 
   // Draw trails.
-  GColor hour_color, minute_color, second_color;
-#if defined(PBL_COLOR)
-  hour_color   = GColorCyan;
-  minute_color = GColorMagenta;
-  second_color = GColorYellow;
-#else
-  hour_color   = GColorWhite;
-  minute_color = GColorWhite;
-  second_color = GColorWhite;
-#endif
+  GColor hour_color   = s_theme.accent;
+  GColor minute_color = s_theme.secondary;
+  GColor second_color = s_theme.highlight;
 
   draw_trail(ctx, &s_hour_trail,   HOUR_DOT_RADIUS, hour_color);
   draw_trail(ctx, &s_minute_trail, MINUTE_DOT_RADIUS, minute_color);
@@ -195,25 +173,17 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, second_color);
   draw_dot(ctx, second_pt, SECOND_DOT_RADIUS);
 
-  // Center dot: red if BT disconnected, white otherwise.
+  // Center dot: highlight if BT disconnected, theme highlight otherwise.
   if (!s_bt_connected) {
-#if defined(PBL_COLOR)
-    graphics_context_set_fill_color(ctx, GColorRed);
-#else
-    graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
+    graphics_context_set_fill_color(ctx, s_theme.highlight);
   } else {
-    graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_context_set_fill_color(ctx, s_theme.highlight);
   }
   draw_dot(ctx, center, CENTER_DOT_RADIUS);
 
   // Draw "!" near center when BT disconnected.
   if (!s_bt_connected) {
-#if defined(PBL_COLOR)
-    graphics_context_set_text_color(ctx, GColorRed);
-#else
-    graphics_context_set_text_color(ctx, GColorWhite);
-#endif
+    graphics_context_set_text_color(ctx, s_theme.highlight);
     graphics_draw_text(ctx, "!",
         fonts_get_system_font(FONT_KEY_GOTHIC_14),
         GRect(center.x + 4, center.y - 10, 14, 14),
@@ -267,6 +237,23 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   layer_mark_dirty(s_canvas_layer);
 }
 
+// --- AppMessage handlers ---
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Refresh text and canvas
+    if (s_date_layer) text_layer_set_text_color(s_date_layer, s_theme.primary);
+    if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // --- Window handlers ---
 static void window_load(Window *window) {
   Layer *window_layer = window_get_root_layer(window);
@@ -280,7 +267,7 @@ static void window_load(Window *window) {
   int date_height = 22;
   s_date_layer = text_layer_create(GRect(0, bounds.size.h - date_height - 2, bounds.size.w, date_height));
   text_layer_set_background_color(s_date_layer, GColorClear);
-  text_layer_set_text_color(s_date_layer, GColorWhite);
+  text_layer_set_text_color(s_date_layer, s_theme.primary);
   text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
   layer_add_child(window_layer, text_layer_get_layer(s_date_layer));
@@ -330,6 +317,12 @@ static void window_unload(Window *window) {
 
 // --- App lifecycle ---
 static void init(void) {
+  // Load saved theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   s_window = window_create();
   window_set_background_color(s_window, GColorBlack);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -343,6 +336,11 @@ static void init(void) {
   connection_service_subscribe((ConnectionHandlers) {
     .pebble_app_connection_handler = bluetooth_handler,
   });
+
+  // Set up AppMessage for config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(128, 64);
 }
 
 static void deinit(void) {
