@@ -30,6 +30,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
     <div class="desc">150ms base tick — fast and intense</div>\
   </div>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label class="title" style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -41,6 +50,15 @@ try {\
       radios[i].checked = (parseInt(radios[i].value) === cfg.baseSpeed);\
     }\
   }\
+  if (cfg.theme !== undefined) {\
+    var tradios = document.querySelectorAll("input[name=theme]");\
+    for (var i = 0; i < tradios.length; i++) {\
+      tradios[i].checked = (parseInt(tradios[i].value) === cfg.theme);\
+    }\
+  } else {\
+    var t1 = document.querySelector("input[name=theme][value=\\\"1\\\"]");\
+    if (t1) t1.checked = true;\
+  }\
 } catch(e) {}\
 document.getElementById("save").addEventListener("click", function() {\
   var radios = document.querySelectorAll("input[name=speed]");\
@@ -48,7 +66,12 @@ document.getElementById("save").addEventListener("click", function() {\
   for (var i = 0; i < radios.length; i++) {\
     if (radios[i].checked) { val = parseInt(radios[i].value); break; }\
   }\
-  var result = { baseSpeed: val };\
+  var theme = 1;\
+  var tradios = document.querySelectorAll("input[name=theme]");\
+  for (var i = 0; i < tradios.length; i++) {\
+    if (tradios[i].checked) { theme = parseInt(tradios[i].value); break; }\
+  }\
+  var result = { baseSpeed: val, theme: theme };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -56,9 +79,11 @@ document.getElementById("save").addEventListener("click", function() {\
 </html>';
 
 var baseSpeed = parseInt(localStorage.getItem('baseSpeed')) || 200;
+var cfgTheme = parseInt(localStorage.getItem('theme'));
+if (isNaN(cfgTheme)) cfgTheme = 1;
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ baseSpeed: baseSpeed }));
+  var config = encodeURIComponent(JSON.stringify({ baseSpeed: baseSpeed, theme: cfgTheme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -67,10 +92,13 @@ Pebble.addEventListener('webviewclosed', function(e) {
     try {
       var config = JSON.parse(decodeURIComponent(e.response));
       baseSpeed = config.baseSpeed || 200;
+      cfgTheme = (config.theme !== undefined) ? config.theme : cfgTheme;
       localStorage.setItem('baseSpeed', baseSpeed.toString());
+      localStorage.setItem('theme', cfgTheme.toString());
 
       Pebble.sendAppMessage({
-        'BaseSpeed': baseSpeed
+        'BaseSpeed': baseSpeed,
+        'Theme': cfgTheme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -80,6 +108,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
-    'BaseSpeed': baseSpeed
+    'BaseSpeed': baseSpeed,
+    'Theme': cfgTheme
   });
 });

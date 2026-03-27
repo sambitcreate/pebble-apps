@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 #define CELL 6
 #define GRID_W (144 / CELL)  // 24
@@ -53,22 +54,15 @@ static bool s_first_launch;
 // Configurable base speed (ms per tick)
 static int s_base_speed = 200;
 
+// Pastel theme
+static PastelTheme s_theme;
+static int s_theme_id = THEME_LAVENDER_DREAM;  // default for games
+
 // --- Snake body gradient coloring ---
 static GColor snake_segment_color(int index, int total) {
-#ifdef PBL_COLOR
-    if (index == 0) return GColorGreen;
-    int shade = index * 3 / total;
-    switch (shade) {
-        case 0: return GColorGreen;
-        case 1: return GColorIslamicGreen;
-        case 2: return GColorDarkGreen;
-        default: return GColorArmyGreen;
-    }
-#else
-    (void)index;
     (void)total;
-    return GColorWhite;
-#endif
+    if (index == 0) return s_theme.accent;
+    return s_theme.secondary;
 }
 
 // --- Difficulty scaling ---
@@ -251,17 +245,17 @@ static void draw_food(GContext *ctx) {
     switch (s_food_type) {
         case FOOD_NORMAL:
             // Circle (filled rect with round corners on color, simple rect on BW)
-            graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+            graphics_context_set_fill_color(ctx, s_theme.highlight);
             graphics_fill_rect(ctx, GRect(fx + 1, fy + 1, CELL - 2, CELL - 2), 2, GCornersAll);
             break;
         case FOOD_BONUS:
             // Yellow square
-            graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite));
+            graphics_context_set_fill_color(ctx, s_theme.highlight);
             graphics_fill_rect(ctx, GRect(fx, fy, CELL, CELL), 0, GCornerNone);
             break;
         case FOOD_SPEED:
             // Cyan diamond (draw as rotated square using lines)
-            graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+            graphics_context_set_fill_color(ctx, s_theme.highlight);
             {
                 int cx = fx + CELL / 2;
                 int cy = fy + CELL / 2;
@@ -295,13 +289,14 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
     if (s_game_over && !s_death_animating) {
         // Game over screen (after death animation finishes)
-        graphics_context_set_text_color(ctx, GColorWhite);
+        graphics_context_set_text_color(ctx, s_theme.accent);
         graphics_draw_text(ctx, "GAME OVER",
                            fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                            GRect(0, 40, bounds.size.w, 30),
                            GTextOverflowModeTrailingEllipsis,
                            GTextAlignmentCenter, NULL);
 
+        graphics_context_set_text_color(ctx, s_theme.primary);
         snprintf(s_score_buf, sizeof(s_score_buf), "Score: %d  Hi: %d", s_score, s_high_score);
         graphics_draw_text(ctx, s_score_buf,
                            fonts_get_system_font(FONT_KEY_GOTHIC_18),
@@ -320,7 +315,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     // Draw grid border
     int play_w = GRID_W * CELL;
     int play_h = GRID_H * CELL;
-    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+    graphics_context_set_stroke_color(ctx, s_theme.muted);
     graphics_draw_rect(ctx, GRect(0, 0, play_w, play_h));
 
     // Draw food (not during death animation)
@@ -343,7 +338,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
         // Draw semi-transparent background for score text
         graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
         graphics_fill_rect(ctx, GRect(0, 0, bounds.size.w, 14), 0, GCornerNone);
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorWhite, GColorWhite));
+        graphics_context_set_text_color(ctx, s_theme.primary);
         graphics_draw_text(ctx, s_score_buf,
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(4, -2, bounds.size.w - 8, 14),
@@ -352,7 +347,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
         // Show speed boost indicator
         if (s_speed_timer > 0) {
-            graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+            graphics_context_set_text_color(ctx, s_theme.highlight);
             graphics_draw_text(ctx, "FAST!",
                                fonts_get_system_font(FONT_KEY_GOTHIC_14),
                                GRect(0, -2, bounds.size.w - 4, 14),
@@ -363,7 +358,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
     // Paused overlay
     if (s_paused) {
-        graphics_context_set_text_color(ctx, GColorWhite);
+        graphics_context_set_text_color(ctx, s_theme.highlight);
         graphics_draw_text(ctx, "PAUSED",
                            fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                            GRect(0, 60, bounds.size.w, 30),
@@ -378,14 +373,14 @@ static void canvas_update(Layer *layer, GContext *ctx) {
         graphics_context_set_stroke_color(ctx, GColorWhite);
         graphics_draw_round_rect(ctx, GRect(10, 30, bounds.size.w - 20, 110), 4);
 
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite));
+        graphics_context_set_text_color(ctx, s_theme.accent);
         graphics_draw_text(ctx, "SNAKE",
                            fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                            GRect(12, 32, bounds.size.w - 24, 28),
                            GTextOverflowModeTrailingEllipsis,
                            GTextAlignmentCenter, NULL);
 
-        graphics_context_set_text_color(ctx, GColorWhite);
+        graphics_context_set_text_color(ctx, s_theme.primary);
         graphics_draw_text(ctx, "Up: Turn Left\nDown: Turn Right\nSelect: Pause",
                            fonts_get_system_font(FONT_KEY_GOTHIC_18),
                            GRect(16, 60, bounds.size.w - 32, 60),
@@ -401,7 +396,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
     // BT disconnect alert
     if (!s_bt_connected) {
-        graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+        graphics_context_set_text_color(ctx, s_theme.highlight);
         graphics_draw_text(ctx, "BT Disconnected",
                            fonts_get_system_font(FONT_KEY_GOTHIC_14),
                            GRect(0, bounds.size.h - 16, bounds.size.w, 16),
@@ -482,6 +477,14 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
             persist_write_int(STORAGE_KEY_SPEED, s_base_speed);
         }
     }
+
+    Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+    if (theme_t) {
+        s_theme_id = theme_t->value->int32;
+        persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+        s_theme = pastel_get_theme(s_theme_id);
+        layer_mark_dirty(s_canvas);
+    }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -527,6 +530,12 @@ static void init(void) {
         s_base_speed = persist_read_int(STORAGE_KEY_SPEED);
     }
 
+    // Load persisted theme
+    if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+        s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+    }
+    s_theme = pastel_get_theme(s_theme_id);
+
     s_window = window_create();
     window_set_click_config_provider(s_window, click_config);
     window_set_window_handlers(s_window, (WindowHandlers) {
@@ -539,7 +548,7 @@ static void init(void) {
     // Set up AppMessage for config
     app_message_register_inbox_received(inbox_received);
     app_message_register_inbox_dropped(inbox_dropped);
-    app_message_open(64, 64);
+    app_message_open(128, 64);
 }
 
 static void deinit(void) {

@@ -7,7 +7,8 @@
   "dependencies": {},
   "enableMultiJS": true,
   "messageKeys": {
-    "BaseSpeed": 0
+    "BaseSpeed": 0,
+    "Theme": 200
   },
   "pebble": {
     "displayName": "Snake",
@@ -19,7 +20,8 @@
       "watchface": false
     },
     "messageKeys": {
-      "BaseSpeed": 0
+      "BaseSpeed": 0,
+      "Theme": 200
     },
     "resources": {
       "media": []
