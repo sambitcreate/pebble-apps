@@ -23,12 +23,33 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <label>Show Digital Time</label>\
   <label class="toggle"><input type="checkbox" id="showDigital"><span class="slider"></span></label>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
-try { var cfg = JSON.parse(decodeURIComponent(params)); if (cfg.showDigital) document.getElementById("showDigital").checked = true; } catch(e) {}\
+try {\
+  var cfg = JSON.parse(decodeURIComponent(params));\
+  if (cfg.showDigital) document.getElementById("showDigital").checked = true;\
+  var themeVal = cfg.theme || 0;\
+  var themeEl = document.querySelector("input[name=theme][value=\\"" + themeVal + "\\"]");\
+  if (themeEl) themeEl.checked = true;\
+} catch(e) {\
+  var defTheme = document.querySelector("input[name=theme][value=\\"0\\"]");\
+  if (defTheme) defTheme.checked = true;\
+}\
 document.getElementById("save").addEventListener("click", function() {\
-  var result = { showDigital: document.getElementById("showDigital").checked };\
+  var theme = 0;\
+  var themeRadios = document.getElementsByName("theme");\
+  for (var i = 0; i < themeRadios.length; i++) { if (themeRadios[i].checked) { theme = parseInt(themeRadios[i].value); break; } }\
+  var result = { showDigital: document.getElementById("showDigital").checked, theme: theme };\
   window.location.href = "pebblejs://close#" + encodeURIComponent(JSON.stringify(result));\
 });\
 </script>\
@@ -36,9 +57,10 @@ document.getElementById("save").addEventListener("click", function() {\
 </html>';
 
 var showDigital = localStorage.getItem('showDigital') === 'true';
+var theme = parseInt(localStorage.getItem('theme') || '0', 10);
 
 Pebble.addEventListener('showConfiguration', function() {
-  var config = encodeURIComponent(JSON.stringify({ showDigital: showDigital }));
+  var config = encodeURIComponent(JSON.stringify({ showDigital: showDigital, theme: theme }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
 
@@ -47,10 +69,13 @@ Pebble.addEventListener('webviewclosed', function(e) {
     try {
       var config = JSON.parse(decodeURIComponent(e.response));
       showDigital = config.showDigital || false;
+      theme = config.theme || 0;
       localStorage.setItem('showDigital', showDigital.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
-        'ShowDigital': showDigital ? 1 : 0
+        'ShowDigital': showDigital ? 1 : 0,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -60,6 +85,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
 
 Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
-    'ShowDigital': showDigital ? 1 : 0
+    'ShowDigital': showDigital ? 1 : 0,
+    'Theme': theme
   });
 });

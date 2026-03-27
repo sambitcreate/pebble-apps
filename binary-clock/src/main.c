@@ -1,9 +1,13 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 static Window *s_window;
 static Layer *s_canvas;
 static TextLayer *s_time_layer;
 static TextLayer *s_date_layer;
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // BCD columns: H1 H0 : M1 M0 : S1 S0
 // Bit weights top to bottom: 8, 4, 2, 1
@@ -31,8 +35,6 @@ static int s_anim_progress[COLS][ROWS];
 static AppTimer *s_anim_timer = NULL;
 static bool s_animating = false;
 
-// Time-of-day theme flag
-static bool s_is_night = false;
 
 static void apply_digital_visibility(void) {
   layer_set_hidden(text_layer_get_layer(s_time_layer), !s_show_digital);
@@ -121,9 +123,6 @@ static void update_time(void) {
     start_animation();
   }
 
-  // Update night mode flag (9PM-6AM = night)
-  s_is_night = (t->tm_hour >= 21 || t->tm_hour < 6);
-
   // Digital time string
   snprintf(s_time_buf, sizeof(s_time_buf), "%02d:%02d:%02d",
            t->tm_hour, t->tm_min, t->tm_sec);
@@ -142,15 +141,8 @@ static void update_time(void) {
   text_layer_set_text(s_date_layer, s_date_buf);
 
   // Update theme colors on text layers
-#ifdef PBL_COLOR
-  if (s_is_night) {
-    text_layer_set_text_color(s_date_layer, GColorLightGray);
-    text_layer_set_text_color(s_time_layer, GColorLightGray);
-  } else {
-    text_layer_set_text_color(s_date_layer, GColorWhite);
-    text_layer_set_text_color(s_time_layer, GColorDarkGray);
-  }
-#endif
+  text_layer_set_text_color(s_date_layer, s_theme.secondary);
+  text_layer_set_text_color(s_time_layer, s_theme.accent);
 }
 
 // Screen is 144x168. All positions are hardcoded for safety.
@@ -184,34 +176,13 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   const int weights[ROWS] = {8, 4, 2, 1};
 
-  // Determine theme colors
-  GColor color_on, color_off_stroke, color_dim, color_label, color_colon, color_col_label;
-#ifdef PBL_COLOR
-  if (s_is_night) {
-    // Night theme: dim blue/gray palette
-    color_on = GColorPictonBlue;       // soft blue
-    color_off_stroke = GColorDarkGray;
-    color_dim = GColorDarkGray;
-    color_label = GColorDarkGray;
-    color_colon = GColorPictonBlue;
-    color_col_label = GColorDarkGray;
-  } else {
-    // Day theme: bright green/white
-    color_on = GColorGreen;
-    color_off_stroke = GColorDarkGreen;
-    color_dim = GColorDarkGray;
-    color_label = GColorDarkGray;
-    color_colon = GColorGreen;
-    color_col_label = GColorDarkGray;
-  }
-#else
-  color_on = GColorWhite;
-  color_off_stroke = GColorLightGray;
-  color_dim = GColorDarkGray;
-  color_label = GColorLightGray;
-  color_colon = GColorWhite;
-  color_col_label = GColorLightGray;
-#endif
+  // Determine theme colors from pastel design system
+  GColor color_on         = s_theme.highlight;
+  GColor color_off_stroke = s_theme.muted;
+  GColor color_dim        = s_theme.muted;
+  GColor color_label      = s_theme.muted;
+  GColor color_colon      = s_theme.highlight;
+  GColor color_col_label  = s_theme.muted;
 
   // Row weight labels -- left margin, clear of all dots
   graphics_context_set_text_color(ctx, color_label);
@@ -327,6 +298,17 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     persist_write_bool(STORAGE_KEY_SHOW_DIGITAL, s_show_digital);
     apply_digital_visibility();
   }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Refresh text layer colors
+    text_layer_set_text_color(s_date_layer, s_theme.secondary);
+    text_layer_set_text_color(s_time_layer, s_theme.accent);
+    layer_mark_dirty(s_canvas);
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -344,7 +326,7 @@ static void window_load(Window *window) {
   // Date display at top
   s_date_layer = text_layer_create(GRect(0, 0, bounds.size.w, 20));
   text_layer_set_background_color(s_date_layer, GColorClear);
-  text_layer_set_text_color(s_date_layer, PBL_IF_COLOR_ELSE(GColorWhite, GColorWhite));
+  text_layer_set_text_color(s_date_layer, s_theme.secondary);
   text_layer_set_font(s_date_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_date_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_date_layer));
@@ -352,7 +334,7 @@ static void window_load(Window *window) {
   // Digital time at bottom
   s_time_layer = text_layer_create(GRect(0, bounds.size.h - 36, bounds.size.w, 30));
   text_layer_set_background_color(s_time_layer, GColorClear);
-  text_layer_set_text_color(s_time_layer, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_time_layer, s_theme.accent);
   text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_time_layer));
@@ -361,6 +343,10 @@ static void window_load(Window *window) {
   if (persist_exists(STORAGE_KEY_SHOW_DIGITAL)) {
     s_show_digital = persist_read_bool(STORAGE_KEY_SHOW_DIGITAL);
   }
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
   apply_digital_visibility();
 
   // Initialize previous digits to current so first draw has no animation
@@ -400,7 +386,7 @@ static void init(void) {
   // Set up AppMessage for config
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
-  app_message_open(64, 64);
+  app_message_open(128, 64);
 }
 
 static void deinit(void) {

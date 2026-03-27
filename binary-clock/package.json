@@ -15,7 +15,8 @@
       "watchface": true
     },
     "messageKeys": {
-      "ShowDigital": 0
+      "ShowDigital": 0,
+      "Theme": 200
     },
     "resources": {
       "media": []
