@@ -1,4 +1,5 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
 
 // ── Storage keys ──
 #define STORAGE_KEY_COUNT       1
@@ -20,6 +21,9 @@ static const int GOAL_OPTIONS[] = {0, 10, 25, 50, 100, 250, 500, 1000};
 
 // ── History ──
 #define HISTORY_DAYS 7
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 // ── UI layers ──
 static Window *s_window;
@@ -120,6 +124,12 @@ static void load_data(void) {
     s_last_day = persist_read_int(STORAGE_KEY_DAY);
   }
 
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   int today = current_day_of_year();
   if (s_last_day >= 0 && s_last_day != today) {
     // Calculate how many days have passed (handle year wrap)
@@ -173,8 +183,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                          radius * 2, radius * 2);
 
   // ── Background ring ──
-  graphics_context_set_stroke_color(ctx,
-    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  graphics_context_set_stroke_color(ctx, s_theme.muted);
   graphics_context_set_stroke_width(ctx, 4);
   graphics_draw_arc(ctx, arc_rect, GOvalScaleModeFitCircle,
                     0, TRIG_MAX_ANGLE);
@@ -183,9 +192,9 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   int angle = (s_count % 100) * 360 / 100;
   GColor arc_color;
   if (s_flash_active) {
-    arc_color = PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
+    arc_color = s_theme.accent;
   } else {
-    arc_color = PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite);
+    arc_color = s_theme.highlight;
   }
   graphics_context_set_stroke_color(ctx, arc_color);
   graphics_context_set_stroke_width(ctx, 4);
@@ -206,8 +215,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     int dot_x = center.x + (dot_r * sin_lookup(goal_trig)) / TRIG_MAX_RATIO;
     int dot_y = center.y - (dot_r * cos_lookup(goal_trig)) / TRIG_MAX_RATIO;
 
-    graphics_context_set_fill_color(ctx,
-      PBL_IF_COLOR_ELSE(GColorRed, GColorWhite));
+    graphics_context_set_fill_color(ctx, s_theme.highlight);
     graphics_fill_circle(ctx, GPoint(dot_x, dot_y), 3);
   }
 }
@@ -400,8 +408,7 @@ static void window_load(Window *window) {
 
   // ── Status bar with dotted separator ──
   s_status_bar = status_bar_layer_create();
-  status_bar_layer_set_colors(s_status_bar, GColorBlack,
-    PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  status_bar_layer_set_colors(s_status_bar, GColorBlack, s_theme.accent);
   status_bar_layer_set_separator_mode(s_status_bar,
     StatusBarLayerSeparatorModeDotted);
   layer_add_child(root, status_bar_layer_get_layer(s_status_bar));
@@ -422,7 +429,7 @@ static void window_load(Window *window) {
   s_count_layer = text_layer_create(GRect(0, count_y,
                                           bounds.size.w, 50));
   text_layer_set_background_color(s_count_layer, GColorClear);
-  text_layer_set_text_color(s_count_layer, GColorWhite);
+  text_layer_set_text_color(s_count_layer, s_theme.primary);
   text_layer_set_font(s_count_layer,
     fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_count_layer, GTextAlignmentCenter);
@@ -432,8 +439,7 @@ static void window_load(Window *window) {
   s_circle_label_layer = text_layer_create(GRect(0, count_y + 46,
                                                   bounds.size.w, 20));
   text_layer_set_background_color(s_circle_label_layer, GColorClear);
-  text_layer_set_text_color(s_circle_label_layer,
-    PBL_IF_COLOR_ELSE(GColorCyan, GColorWhite));
+  text_layer_set_text_color(s_circle_label_layer, s_theme.accent);
   text_layer_set_font(s_circle_label_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_circle_label_layer, GTextAlignmentCenter);
@@ -442,8 +448,7 @@ static void window_load(Window *window) {
   // ── Goal label (top area, inside canvas) ──
   s_goal_layer = text_layer_create(GRect(0, 2, bounds.size.w, 18));
   text_layer_set_background_color(s_goal_layer, GColorClear);
-  text_layer_set_text_color(s_goal_layer,
-    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_goal_layer, s_theme.muted);
   text_layer_set_font(s_goal_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_goal_layer, GTextAlignmentCenter);
@@ -453,8 +458,7 @@ static void window_load(Window *window) {
   s_yesterday_layer = text_layer_create(GRect(0, canvas_h - 34,
                                                bounds.size.w, 18));
   text_layer_set_background_color(s_yesterday_layer, GColorClear);
-  text_layer_set_text_color(s_yesterday_layer,
-    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_yesterday_layer, s_theme.muted);
   text_layer_set_font(s_yesterday_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_yesterday_layer, GTextAlignmentCenter);
@@ -464,8 +468,7 @@ static void window_load(Window *window) {
   s_hint_layer = text_layer_create(GRect(0, canvas_h - 20,
                                           bounds.size.w, 20));
   text_layer_set_background_color(s_hint_layer, GColorClear);
-  text_layer_set_text_color(s_hint_layer,
-    PBL_IF_COLOR_ELSE(GColorDarkGray, GColorLightGray));
+  text_layer_set_text_color(s_hint_layer, s_theme.muted);
   text_layer_set_font(s_hint_layer,
     fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_hint_layer, GTextAlignmentCenter);
@@ -541,6 +544,20 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     s_step_up = (int)step_up_t->value->int32;
     if (s_step_up < 1) s_step_up = 1;
     persist_write_int(STORAGE_KEY_STEP_UP, s_step_up);
+  }
+
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Re-apply theme colors
+    text_layer_set_text_color(s_count_layer, s_theme.primary);
+    text_layer_set_text_color(s_circle_label_layer, s_theme.accent);
+    text_layer_set_text_color(s_goal_layer, s_theme.muted);
+    text_layer_set_text_color(s_yesterday_layer, s_theme.muted);
+    text_layer_set_text_color(s_hint_layer, s_theme.muted);
+    status_bar_layer_set_colors(s_status_bar, GColorBlack, s_theme.accent);
   }
 
   update_display();

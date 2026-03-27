@@ -9,7 +9,8 @@
   "messageKeys": {
     "Goal": 0,
     "StepSelect": 1,
-    "StepUp": 2
+    "StepUp": 2,
+    "Theme": 200
   },
   "pebble": {
     "displayName": "Tally Counter",
@@ -23,7 +24,8 @@
     "messageKeys": {
       "Goal": 0,
       "StepSelect": 1,
-      "StepUp": 2
+      "StepUp": 2,
+      "Theme": 200
     },
     "resources": {
       "media": []

@@ -31,6 +31,15 @@ button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-wei
   <input type="number" id="stepUp" min="1" max="999" placeholder="5">\
   <div class="hint">Increment per up press (default: 5)</div>\
 </div>\
+<div class="option" style="flex-direction: column; align-items: flex-start;">\
+  <label style="margin-bottom: 12px;">Color Theme</label>\
+  <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="0"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#FFAA55;"></span> Warm Sunset</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="1"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAAAFF;"></span> Lavender Dream</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="2"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#55AAFF;"></span> Cool Ocean</label>\
+    <label style="display:flex; align-items:center; gap:8px;"><input type="radio" name="theme" value="3"> <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#AAFFAA;"></span> Forest Meadow</label>\
+  </div>\
+</div>\
 <button id="save">Save</button>\
 <script>\
 var params = window.location.hash.substring(1);\
@@ -39,12 +48,15 @@ try {\
   if (cfg.goal !== undefined) document.getElementById("goal").value = cfg.goal;\
   if (cfg.stepSelect !== undefined) document.getElementById("stepSelect").value = cfg.stepSelect;\
   if (cfg.stepUp !== undefined) document.getElementById("stepUp").value = cfg.stepUp;\
+  if (cfg.theme !== undefined) { var r = document.querySelector("input[name=theme][value=\\\"" + cfg.theme + "\\\"]"); if (r) r.checked = true; }\
 } catch(e) {}\
 document.getElementById("save").addEventListener("click", function() {\
+  var themeEl = document.querySelector("input[name=theme]:checked");\
   var result = {\
     goal: parseInt(document.getElementById("goal").value, 10) || 0,\
     stepSelect: parseInt(document.getElementById("stepSelect").value, 10) || 1,\
-    stepUp: parseInt(document.getElementById("stepUp").value, 10) || 5\
+    stepUp: parseInt(document.getElementById("stepUp").value, 10) || 5,\
+    theme: themeEl ? parseInt(themeEl.value, 10) : 0\
   };\
   if (result.stepSelect < 1) result.stepSelect = 1;\
   if (result.stepUp < 1) result.stepUp = 1;\
@@ -57,12 +69,14 @@ document.getElementById("save").addEventListener("click", function() {\
 var goal = parseInt(localStorage.getItem('goal'), 10) || 0;
 var stepSelect = parseInt(localStorage.getItem('stepSelect'), 10) || 1;
 var stepUp = parseInt(localStorage.getItem('stepUp'), 10) || 5;
+var theme = parseInt(localStorage.getItem('theme'), 10) || 0;
 
 Pebble.addEventListener('showConfiguration', function() {
   var config = encodeURIComponent(JSON.stringify({
     goal: goal,
     stepSelect: stepSelect,
-    stepUp: stepUp
+    stepUp: stepUp,
+    theme: theme
   }));
   Pebble.openURL('data:text/html,' + encodeURIComponent(CONFIG_HTML) + '#' + config);
 });
@@ -74,15 +88,18 @@ Pebble.addEventListener('webviewclosed', function(e) {
       goal = config.goal || 0;
       stepSelect = config.stepSelect || 1;
       stepUp = config.stepUp || 5;
+      theme = (typeof config.theme === 'number') ? config.theme : 0;
 
       localStorage.setItem('goal', goal.toString());
       localStorage.setItem('stepSelect', stepSelect.toString());
       localStorage.setItem('stepUp', stepUp.toString());
+      localStorage.setItem('theme', theme.toString());
 
       Pebble.sendAppMessage({
         'Goal': goal,
         'StepSelect': stepSelect,
-        'StepUp': stepUp
+        'StepUp': stepUp,
+        'Theme': theme
       });
     } catch (err) {
       console.log('Config parse error: ' + err);
@@ -94,6 +111,7 @@ Pebble.addEventListener('ready', function() {
   Pebble.sendAppMessage({
     'Goal': goal,
     'StepSelect': stepSelect,
-    'StepUp': stepUp
+    'StepUp': stepUp,
+    'Theme': theme
   });
 });
