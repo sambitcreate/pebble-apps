@@ -1,4 +1,8 @@
 #include <pebble.h>
+#include "../../shared/pebble_pastel.h"
+
+static PastelTheme s_theme;
+static int s_theme_id = THEME_WARM_SUNSET;
 
 static Window *s_window;
 static Layer *s_canvas_layer;
@@ -23,40 +27,6 @@ static int s_pulse_step;          // 0..20 (50ms * 20 = 1000ms = 1 second)
 static char s_time_buf[8];
 static char s_date_buf[8];        // "MAR 24" etc.
 
-// ---- Time-of-day color lookup (color platforms) ----
-
-#if defined(PBL_COLOR)
-// Hour ring color cycles through the day:
-// 0=cyan, 6=green, 12=yellow, 18=magenta
-// We define 4 anchor colors and pick the nearest for each quarter.
-static GColor hour_color_for_time(int hour) {
-  // 0-2: cyan, 3-5: transition cyan->green, 6-8: green,
-  // 9-11: transition green->yellow, 12-14: yellow,
-  // 15-17: transition yellow->magenta, 18-20: magenta,
-  // 21-23: transition magenta->cyan
-  if (hour < 3) return GColorCyan;
-  if (hour < 6) return GColorMediumSpringGreen;
-  if (hour < 9) return GColorGreen;
-  if (hour < 12) return GColorChromeYellow;
-  if (hour < 15) return GColorYellow;
-  if (hour < 18) return GColorOrange;
-  if (hour < 21) return GColorMagenta;
-  return GColorVividViolet;
-}
-
-// Minute ring gets a complementary shifted hue
-static GColor minute_color_for_time(int hour) {
-  // Offset by ~6 hours from hour ring for contrast
-  if (hour < 3) return GColorMagenta;
-  if (hour < 6) return GColorVividViolet;
-  if (hour < 9) return GColorCyan;
-  if (hour < 12) return GColorMediumSpringGreen;
-  if (hour < 15) return GColorGreen;
-  if (hour < 18) return GColorChromeYellow;
-  if (hour < 21) return GColorYellow;
-  return GColorOrange;
-}
-#endif
 
 // ---- Drawing helpers ----
 
@@ -69,7 +39,7 @@ static void draw_circle_outline(GContext *ctx, GPoint center, int radius, int st
 static void draw_crosshair(GContext *ctx, GPoint center) {
   // 4 short lines, each 4px long, from center
   graphics_context_set_stroke_width(ctx, 1);
-  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_context_set_stroke_color(ctx, s_theme.primary);
   graphics_draw_line(ctx, GPoint(center.x - 4, center.y), GPoint(center.x - 1, center.y));
   graphics_draw_line(ctx, GPoint(center.x + 1, center.y), GPoint(center.x + 4, center.y));
   graphics_draw_line(ctx, GPoint(center.x, center.y - 4), GPoint(center.x, center.y - 1));
@@ -94,34 +64,22 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   int min_stroke = 1 + (s_current_min >= 30 ? 1 : 0);
 
   // Ring 1 - Hours
-#if defined(PBL_COLOR)
-  graphics_context_set_stroke_color(ctx, hour_color_for_time(s_current_hour));
-#else
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.accent);
   draw_circle_outline(ctx, center, s_hour_ring_radius, hour_stroke);
 
   // Ring 2 - Minutes
-#if defined(PBL_COLOR)
-  graphics_context_set_stroke_color(ctx, minute_color_for_time(s_current_hour));
-#else
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.highlight);
   draw_circle_outline(ctx, center, s_minute_ring_radius, min_stroke);
 
   // Ring 3 - Pulse (seconds)
-#if defined(PBL_COLOR)
-  graphics_context_set_stroke_color(ctx, GColorYellow);
-#else
-  graphics_context_set_stroke_color(ctx, GColorLightGray);
-#endif
+  graphics_context_set_stroke_color(ctx, s_theme.accent);
   draw_circle_outline(ctx, center, s_pulse_radius, 1);
 
   // Crosshair at center
   draw_crosshair(ctx, center);
 
   // Date text along the crosshair, left of center
-  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_context_set_text_color(ctx, s_theme.primary);
   GFont date_font = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   // Position: small text just left of the crosshair, vertically centered
   // We offset to the left so it sits beside the crosshair gap
@@ -234,11 +192,7 @@ static void window_load(Window *window) {
   GRect time_frame = GRect(0, bounds.size.h - 20, bounds.size.w, 20);
   s_time_layer = text_layer_create(time_frame);
   text_layer_set_background_color(s_time_layer, GColorClear);
-#if defined(PBL_COLOR)
-  text_layer_set_text_color(s_time_layer, GColorDarkGray);
-#else
-  text_layer_set_text_color(s_time_layer, GColorLightGray);
-#endif
+  text_layer_set_text_color(s_time_layer, s_theme.muted);
   text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentCenter);
   text_layer_set_text(s_time_layer, "00:00");
@@ -266,9 +220,36 @@ static void window_unload(Window *window) {
   layer_destroy(s_canvas_layer);
 }
 
+// ---- AppMessage handler ----
+
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *theme_t = dict_find(iter, PASTEL_MSG_KEY_THEME);
+  if (theme_t) {
+    s_theme_id = theme_t->value->int32;
+    persist_write_int(PASTEL_STORAGE_KEY_THEME, s_theme_id);
+    s_theme = pastel_get_theme(s_theme_id);
+    // Update time text color
+    text_layer_set_text_color(s_time_layer, s_theme.muted);
+    // Trigger redraw
+    if (s_canvas_layer) {
+      layer_mark_dirty(s_canvas_layer);
+    }
+  }
+}
+
+static void inbox_dropped(AppMessageResult reason, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Message dropped: %d", reason);
+}
+
 // ---- App lifecycle ----
 
 static void init(void) {
+  // Load theme
+  if (persist_exists(PASTEL_STORAGE_KEY_THEME)) {
+    s_theme_id = persist_read_int(PASTEL_STORAGE_KEY_THEME);
+  }
+  s_theme = pastel_get_theme(s_theme_id);
+
   s_window = window_create();
   window_set_background_color(s_window, GColorBlack);
   window_set_window_handlers(s_window, (WindowHandlers) {
@@ -279,6 +260,11 @@ static void init(void) {
 
   // Subscribe to second ticks for ring 1 and ring 2 updates
   tick_timer_service_subscribe(SECOND_UNIT, tick_handler);
+
+  // Set up AppMessage for theme config
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_inbox_dropped(inbox_dropped);
+  app_message_open(64, 64);
 }
 
 static void deinit(void) {
